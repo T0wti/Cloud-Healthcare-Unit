@@ -153,14 +153,21 @@ LOCATION '/bronze/esatis';
 
 -- ---------------------------------------------------------------------
 -- Source 4 : décès INSEE (job J14_ING_DECES)
+-- L'identité (nom à pays_naissance) sert uniquement au dédoublonnage :
+-- elle n'est pas reprise dans silver.deces et n'atteint jamais le Gold.
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS deces;
 CREATE EXTERNAL TABLE deces (
-    id_execution     STRING,
-    sexe             STRING,
-    date_naissance   STRING,
-    date_deces       STRING COMMENT 'Format source AAAA-MM-JJ',
-    code_lieu_deces  STRING COMMENT 'Code commune INSEE'
+    id_execution         STRING,
+    sexe                 STRING,
+    date_naissance       STRING,
+    date_deces           STRING COMMENT 'Format source AAAA-MM-JJ',
+    code_lieu_deces      STRING COMMENT 'Code commune INSEE',
+    nom                  STRING COMMENT 'Identité : dédoublonnage seulement',
+    prenom               STRING COMMENT 'Identité : dédoublonnage seulement',
+    code_lieu_naissance  STRING COMMENT 'Identité : dédoublonnage seulement',
+    lieu_naissance       STRING COMMENT 'Identité : dédoublonnage seulement',
+    pays_naissance       STRING COMMENT 'Identité : dédoublonnage seulement'
 )
 ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
 STORED AS TEXTFILE
@@ -211,7 +218,7 @@ UNION ALL SELECT 'cog_region',       COUNT(*) FROM cog_region;
 -- La dernière colonne (id_execution ou code) doit toujours être remplie.
 SELECT 'etablissement' AS table_bronze, COUNT(*) AS lignes_suspectes FROM etablissement WHERE id_execution IS NULL OR id_execution = ''
 UNION ALL SELECT 'hospitalisations', COUNT(*) FROM hospitalisations WHERE id_execution IS NULL OR id_execution = ''
-UNION ALL SELECT 'deces',            COUNT(*) FROM deces WHERE code_lieu_deces IS NULL
+UNION ALL SELECT 'deces',            COUNT(*) FROM deces WHERE pays_naissance IS NULL
 UNION ALL SELECT 'esatis',           COUNT(*) FROM esatis WHERE annee_recueil IS NULL OR annee_recueil = '';
 
 SELECT annee_recueil, COUNT(*) AS nb_etablissements FROM esatis GROUP BY annee_recueil;
