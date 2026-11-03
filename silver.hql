@@ -1,8 +1,27 @@
+SET hive.mapred.mode=nonstrict;
+SET hive.auto.convert.join=true;
+SET parquet.compression=SNAPPY;
+SET parquet.block.size=33554432;
+SET hive.execution.engine=spark;
+SET spark.executor.instances=1;
+SET spark.executor.cores=1;
+SET spark.executor.memory=1g;
+SET spark.yarn.executor.memoryOverhead=384;
+SET spark.driver.memory=512m;
+SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
+-- Les SET restent en tête, sans commentaire avant eux : sinon Hue les
+-- envoie au parseur SQL et Hive répond « missing KW_ROLE ».
+-- Moteur : Hive on Spark (Hive -> Configuration -> Spark On YARN Service
+-- = Spark dans Cloudera Manager). Pour revenir à MapReduce, remplacer les
+-- six SET spark par : SET hive.execution.engine=mr;
+--
 -- Projet CHU - Étape 2 : du Bronze au Silver
--- Exécution :
---   beeline -u jdbc:hive2://localhost:10000 -n cloudera \
---           --hivevar id_silver=$(date +%Y%m%d%H%M%S) -f 02_silver.hql
+-- Exécution : éditeur Hive de Hue, ou
+--   beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 02_silver.hql
+-- Identifiant d'exécution (id_silver) : '20261102_1', écrit en dur.
+-- À changer à chaque nouvelle exécution (remplacer partout) pour que
+-- l'audit et le contrôle du seuil ne mélangent pas deux exécutions.
 --
 -- Règles appliquées (livrable, fiches des jobs 2.2 à 2.7) :
 --   typage      : dates selon le format de chaque source, virgule décimale -> point
@@ -18,12 +37,6 @@
 -- Les dates sont gardées en chaîne AAAA-MM-JJ (Hive 1.1 n'a pas de DATE en
 -- Parquet) et accompagnées de leur id_temps AAAAMMJJ, -1 si absente ou invalide.
 -- =====================================================================
-
-SET hive.mapred.mode=nonstrict;
-SET hive.auto.convert.join=true;
-SET parquet.compression=SNAPPY;
--- Plus rapide si Spark est démarré sur la VM :
--- SET hive.execution.engine=spark;
 
 -- ---------------------------------------------------------------------
 -- Fonctions de nettoyage (valables pour la session)
@@ -265,6 +278,7 @@ CREATE TABLE IF NOT EXISTS audit (
 -- ---------------------------------------------------------------------
 -- LOCALISATION (COG départements + régions)
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_localisation;
 CREATE TEMPORARY TABLE t_localisation AS
 SELECT d.id_execution, d.fichier, d.pos_octet, d.contenu,
        d.code_departement, d.departement, d.code_region,
@@ -285,6 +299,7 @@ FROM (
 ) d
 LEFT JOIN bronze.cog_region r ON txt(r.reg) = d.code_region;
 
+DROP TABLE IF EXISTS d_localisation;
 CREATE TEMPORARY TABLE d_localisation AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY code_departement ORDER BY fichier, pos_octet) AS rn,
@@ -317,7 +332,7 @@ FROM (
 ) u;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'localisation')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_localisation WHERE motif IS NOT NULL
@@ -329,6 +344,7 @@ FROM (
 -- ---------------------------------------------------------------------
 -- SPECIALITE
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_specialite;
 CREATE TEMPORARY TABLE t_specialite AS
 SELECT id_execution,
        INPUT__FILE__NAME           AS fichier,
@@ -340,6 +356,7 @@ SELECT id_execution,
        nvl(txt(specialite), '') AS empreinte
 FROM bronze.specialites;
 
+DROP TABLE IF EXISTS d_specialite;
 CREATE TEMPORARY TABLE d_specialite AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY code_specialite ORDER BY fichier, pos_octet) AS rn,
@@ -354,7 +371,7 @@ FROM d_specialite
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'specialite')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_specialite WHERE motif IS NOT NULL
@@ -366,6 +383,7 @@ FROM (
 -- ---------------------------------------------------------------------
 -- DIAGNOSTIC (CIM-10)
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_diagnostic;
 CREATE TEMPORARY TABLE t_diagnostic AS
 SELECT id_execution,
        INPUT__FILE__NAME           AS fichier,
@@ -378,6 +396,7 @@ SELECT id_execution,
        nvl(txt(diagnostic), '') AS empreinte
 FROM bronze.diagnostics;
 
+DROP TABLE IF EXISTS d_diagnostic;
 CREATE TEMPORARY TABLE d_diagnostic AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY code_diagnostic ORDER BY fichier, pos_octet) AS rn,
@@ -392,7 +411,7 @@ FROM d_diagnostic
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'diagnostic')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_diagnostic WHERE motif IS NOT NULL
@@ -404,6 +423,7 @@ FROM (
 -- ---------------------------------------------------------------------
 -- PROFESSIONNEL (+ libellé de spécialité)
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_professionnel;
 CREATE TEMPORARY TABLE t_professionnel AS
 SELECT p.id_execution, p.fichier, p.pos_octet, p.contenu,
        p.id_prof_pseudo, p.profession, p.categorie_professionnelle, p.code_specialite,
@@ -425,6 +445,7 @@ FROM (
 ) p
 LEFT JOIN specialite s ON s.code_specialite = p.code_specialite;
 
+DROP TABLE IF EXISTS d_professionnel;
 CREATE TEMPORARY TABLE d_professionnel AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY id_prof_pseudo ORDER BY fichier, pos_octet) AS rn,
@@ -439,7 +460,7 @@ FROM d_professionnel
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'professionnel')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_professionnel WHERE motif IS NOT NULL
@@ -453,6 +474,7 @@ FROM (
 -- Date de naissance M/J/AAAA d'après le livrable ; AAAA-MM-JJ aussi accepté
 -- au cas où PostgreSQL la renvoie dans son format natif.
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_patient;
 CREATE TEMPORARY TABLE t_patient AS
 SELECT id_execution, fichier, pos_octet, contenu, id_patient_pseudo, sexe, date_naissance, motif,
        concat_ws('|', sexe, nvl(date_naissance, '')) AS empreinte
@@ -468,6 +490,7 @@ FROM (
     FROM bronze.patient
 ) p;
 
+DROP TABLE IF EXISTS d_patient;
 CREATE TEMPORARY TABLE d_patient AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY id_patient_pseudo ORDER BY fichier, pos_octet) AS rn,
@@ -484,7 +507,7 @@ FROM d_patient
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'patient')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_patient WHERE motif IS NOT NULL
@@ -496,6 +519,7 @@ FROM (
 -- ---------------------------------------------------------------------
 -- CONSULTATION (date AAAA-MM-JJ)
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_consultation;
 CREATE TEMPORARY TABLE t_consultation AS
 SELECT id_execution, fichier, pos_octet, contenu,
        num_consultation, id_patient_pseudo, id_prof_pseudo, code_diagnostic,
@@ -518,6 +542,7 @@ FROM (
     FROM bronze.consultation
 ) c;
 
+DROP TABLE IF EXISTS d_consultation;
 CREATE TEMPORARY TABLE d_consultation AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY num_consultation ORDER BY fichier, pos_octet) AS rn,
@@ -534,7 +559,7 @@ FROM d_consultation
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'consultation')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_consultation WHERE motif IS NOT NULL
@@ -546,6 +571,7 @@ FROM (
 -- ---------------------------------------------------------------------
 -- HOSPITALISATION (date JJ/MM/AAAA, durée 1 à 365 jours)
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_hospitalisation;
 CREATE TEMPORARY TABLE t_hospitalisation AS
 SELECT id_execution, fichier, pos_octet, contenu,
        num_hospitalisation, id_patient_pseudo, identifiant_organisation, code_diagnostic,
@@ -570,6 +596,7 @@ FROM (
     FROM bronze.hospitalisations
 ) h;
 
+DROP TABLE IF EXISTS d_hospitalisation;
 CREATE TEMPORARY TABLE d_hospitalisation AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY num_hospitalisation ORDER BY fichier, pos_octet) AS rn,
@@ -586,7 +613,7 @@ FROM d_hospitalisation
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'hospitalisation')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_hospitalisation WHERE motif IS NOT NULL
@@ -600,6 +627,7 @@ FROM (
 -- Vide (classes DI, NR, NV) -> NULL ; texte non numérique -> rejet ;
 -- note hors 0 à 100 -> rejet. 2017 : taux et nb_reco absents -> NULL.
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_satisfaction;
 CREATE TEMPORARY TABLE t_satisfaction AS
 SELECT id_execution, fichier, pos_octet, contenu,
        finess_geo, num_finess_juridique, raison_sociale, region, annee, classement,
@@ -654,6 +682,7 @@ FROM (
 ) e;
 
 -- Clé d'unicité : (établissement, année)
+DROP TABLE IF EXISTS d_satisfaction;
 CREATE TEMPORARY TABLE d_satisfaction AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY finess_geo, annee ORDER BY fichier, pos_octet) AS rn,
@@ -673,7 +702,7 @@ FROM d_satisfaction
 WHERE emp_min = emp_max AND rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'satisfaction')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_satisfaction WHERE motif IS NOT NULL
@@ -686,6 +715,7 @@ FROM (
 -- ETABLISSEMENT (référentiel FINESS, puis établissements e-Satis absents)
 -- Département : code commune, à défaut code postal, contrôlé dans le COG.
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_etablissement;
 CREATE TEMPORARY TABLE t_etablissement AS
 SELECT id_execution, fichier, pos_octet, contenu, identifiant_organisation,
        CASE substr(identifiant_organisation, 1, 1)
@@ -716,6 +746,7 @@ FROM (
     FROM bronze.etablissement
 ) e;
 
+DROP TABLE IF EXISTS d_etablissement;
 CREATE TEMPORARY TABLE d_etablissement AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY identifiant_organisation ORDER BY fichier, pos_octet) AS rn,
@@ -733,7 +764,7 @@ LEFT JOIN localisation l ON l.code_departement = d.dep_calcule
 WHERE d.emp_min = d.emp_max AND d.rn = 1;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'etablissement')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_etablissement WHERE motif IS NOT NULL
@@ -745,6 +776,7 @@ FROM (
 -- Établissements notés par e-Satis mais absents du référentiel :
 -- dernière année connue ; département = début du FINESS géographique,
 -- gardé seulement s'il est dans la région indiquée par e-Satis.
+DROP TABLE IF EXISTS t_etab_esatis;
 CREATE TEMPORARY TABLE t_etab_esatis AS
 SELECT s.identifiant_organisation,
        'Établissement FINESS'                              AS type_structure,
@@ -773,6 +805,7 @@ SELECT * FROM t_etab_esatis;
 -- Une activité sans organisation (exercice libéral non rattaché) n'est pas
 -- une erreur : elle est ignorée et comptée à part dans l'audit.
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_activite;
 CREATE TEMPORARY TABLE t_activite AS
 SELECT id_execution, fichier, pos_octet, contenu, id_prof_pseudo, identifiant_organisation,
        CASE WHEN id_prof_pseudo IS NULL THEN 'cle absente'
@@ -795,7 +828,7 @@ WHERE motif IS NULL AND identifiant_organisation IS NOT NULL
 GROUP BY id_prof_pseudo, identifiant_organisation;
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'activite')
-SELECT id_execution, '${hivevar:id_silver}', '02_silver', fichier, pos_octet, contenu, motif,
+SELECT id_execution, '20261102_1', '02_silver', fichier, pos_octet, contenu, motif,
        from_unixtime(unix_timestamp())
 FROM t_activite
 WHERE motif IS NOT NULL;
@@ -805,6 +838,7 @@ WHERE motif IS NOT NULL;
 -- Clé de dédoublonnage : identité + date de décès. L'identité ne sort pas
 -- des tables temporaires : ni silver.deces ni silver.rejets ne la contiennent.
 -- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS t_deces;
 CREATE TEMPORARY TABLE t_deces AS
 SELECT id_execution,
        INPUT__FILE__NAME           AS fichier,
@@ -824,6 +858,7 @@ SELECT id_execution,
        CASE WHEN pays_naissance IS NULL THEN 'nombre de colonnes incorrect' END AS motif
 FROM bronze.deces;
 
+DROP TABLE IF EXISTS d_deces;
 CREATE TEMPORARY TABLE d_deces AS
 SELECT t.*,
        ROW_NUMBER() OVER (PARTITION BY cle ORDER BY fichier, pos_octet) AS rn,
@@ -845,7 +880,7 @@ FROM (
 LEFT JOIN localisation l ON l.code_departement = dep_commune(d.code_lieu_deces);
 
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'deces')
-SELECT r.id_execution, '${hivevar:id_silver}', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
+SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_deces WHERE motif IS NOT NULL
@@ -858,7 +893,7 @@ FROM (
 -- AUDIT : lues = écrites + rejetées + doublons + ignorées
 -- =====================================================================
 INSERT INTO TABLE audit
-SELECT '${hivevar:id_silver}', l.id_execution, '02_silver', l.flux, from_unixtime(unix_timestamp()),
+SELECT '20261102_1', l.id_execution, '02_silver', l.flux, from_unixtime(unix_timestamp()),
        l.lues, e.ecrites, nvl(r.rejetees, 0),
        l.lues - e.ecrites - nvl(r.rejetees, 0) - l.ignorees,
        l.ignorees,
@@ -902,7 +937,7 @@ LEFT JOIN (
 SELECT flux, lignes_lues, lignes_ecrites, lignes_rejetees, lignes_doublon, lignes_ignorees,
        taux_rejet, statut
 FROM audit
-WHERE id_silver = '${hivevar:id_silver}'
+WHERE id_silver = '20261102_1'
 ORDER BY flux;
 
 SELECT flux, motif, count(*) AS nb
@@ -918,4 +953,4 @@ GROUP BY origine;
 -- Seuil de 5 % : fait échouer beeline (code retour non nul) pour bloquer le Gold
 SELECT assert_true(count(*) = 0) AS seuil_rejets_respecte
 FROM audit
-WHERE id_silver = '${hivevar:id_silver}' AND statut <> 'OK';
+WHERE id_silver = '20261102_1' AND statut <> 'OK';
