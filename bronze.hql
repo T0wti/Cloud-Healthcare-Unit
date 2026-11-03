@@ -202,23 +202,23 @@ LOCATION '/bronze/cog/region';
 -- Contrôles : nombre de lignes par table (à comparer aux sources)
 -- ---------------------------------------------------------------------
 SELECT 'patient'          AS table_bronze, COUNT(*) AS nb_lignes FROM patient
-UNION ALL SELECT 'consultation',     COUNT(*) FROM consultation
-UNION ALL SELECT 'professionnel',    COUNT(*) FROM professionnel
-UNION ALL SELECT 'specialites',      COUNT(*) FROM specialites
-UNION ALL SELECT 'diagnostics',      COUNT(*) FROM diagnostics
-UNION ALL SELECT 'hospitalisations', COUNT(*) FROM hospitalisations
-UNION ALL SELECT 'etablissement',    COUNT(*) FROM etablissement
-UNION ALL SELECT 'activite',         COUNT(*) FROM activite
-UNION ALL SELECT 'esatis',           COUNT(*) FROM esatis
-UNION ALL SELECT 'deces',            COUNT(*) FROM deces
-UNION ALL SELECT 'cog_departement',  COUNT(*) FROM cog_departement
-UNION ALL SELECT 'cog_region',       COUNT(*) FROM cog_region;
+UNION ALL SELECT 'consultation' AS table_bronze,     COUNT(*) AS nb_lignes FROM consultation
+UNION ALL SELECT 'professionnel' AS table_bronze,    COUNT(*) AS nb_lignes FROM professionnel
+UNION ALL SELECT 'specialites' AS table_bronze,      COUNT(*) AS nb_lignes FROM specialites
+UNION ALL SELECT 'diagnostics' AS table_bronze,      COUNT(*) AS nb_lignes FROM diagnostics
+UNION ALL SELECT 'hospitalisations' AS table_bronze, COUNT(*) AS nb_lignes FROM hospitalisations
+UNION ALL SELECT 'etablissement' AS table_bronze,    COUNT(*) AS nb_lignes FROM etablissement
+UNION ALL SELECT 'activite' AS table_bronze,         COUNT(*) AS nb_lignes FROM activite
+UNION ALL SELECT 'esatis' AS table_bronze,           COUNT(*) AS nb_lignes FROM esatis
+UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS nb_lignes FROM deces
+UNION ALL SELECT 'cog_departement' AS table_bronze,  COUNT(*) AS nb_lignes FROM cog_departement
+UNION ALL SELECT 'cog_region' AS table_bronze,       COUNT(*) AS nb_lignes FROM cog_region;
 
 -- Lignes mal découpées : un ';' dans un texte décale les colonnes.
 -- La dernière colonne (id_execution ou code) doit toujours être remplie.
 SELECT 'etablissement' AS table_bronze, COUNT(*) AS lignes_suspectes FROM etablissement WHERE id_execution IS NULL OR id_execution = ''
-UNION ALL SELECT 'hospitalisations', COUNT(*) FROM hospitalisations WHERE id_execution IS NULL OR id_execution = ''
-UNION ALL SELECT 'deces',            COUNT(*) FROM deces WHERE pays_naissance IS NULL
-UNION ALL SELECT 'esatis',           COUNT(*) FROM esatis WHERE annee_recueil IS NULL OR annee_recueil = '';
+UNION ALL SELECT 'hospitalisations' AS table_bronze, COUNT(*) AS lignes_suspectes FROM hospitalisations WHERE id_execution IS NULL OR id_execution = ''
+UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS lignes_suspectes FROM deces WHERE pays_naissance IS NULL
+UNION ALL SELECT 'esatis' AS table_bronze,           COUNT(*) AS lignes_suspectes FROM esatis WHERE annee_recueil IS NULL OR annee_recueil = '';
 
 SELECT annee_recueil, COUNT(*) AS nb_etablissements FROM esatis GROUP BY annee_recueil;
