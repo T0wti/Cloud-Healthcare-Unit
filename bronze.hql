@@ -153,8 +153,7 @@ LOCATION '/bronze/esatis';
 
 -- ---------------------------------------------------------------------
 -- Source 4 : décès INSEE (job J14_ING_DECES)
--- L'identité (nom à pays_naissance) sert uniquement au dédoublonnage :
--- elle n'est pas reprise dans silver.deces et n'atteint jamais le Gold.
+-- Talend n'extrait aucune identité (ni nom, ni prénoms, ni lieu de naissance).
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS deces;
 CREATE EXTERNAL TABLE deces (
@@ -163,11 +162,7 @@ CREATE EXTERNAL TABLE deces (
     date_naissance       STRING,
     date_deces           STRING COMMENT 'Format source AAAA-MM-JJ',
     code_lieu_deces      STRING COMMENT 'Code commune INSEE',
-    nom                  STRING COMMENT 'Identité : dédoublonnage seulement',
-    prenom               STRING COMMENT 'Identité : dédoublonnage seulement',
-    code_lieu_naissance  STRING COMMENT 'Identité : dédoublonnage seulement',
-    lieu_naissance       STRING COMMENT 'Identité : dédoublonnage seulement',
-    pays_naissance       STRING COMMENT 'Identité : dédoublonnage seulement'
+    numero_acte_deces    STRING COMMENT 'Numéroté par commune et par année'
 )
 ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
 STORED AS TEXTFILE
@@ -218,7 +213,7 @@ UNION ALL SELECT 'cog_region' AS table_bronze,       COUNT(*) AS nb_lignes FROM 
 -- La dernière colonne (id_execution ou code) doit toujours être remplie.
 SELECT 'etablissement' AS table_bronze, COUNT(*) AS lignes_suspectes FROM etablissement WHERE id_execution IS NULL OR id_execution = ''
 UNION ALL SELECT 'hospitalisations' AS table_bronze, COUNT(*) AS lignes_suspectes FROM hospitalisations WHERE id_execution IS NULL OR id_execution = ''
-UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS lignes_suspectes FROM deces WHERE pays_naissance IS NULL
+UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS lignes_suspectes FROM deces WHERE numero_acte_deces IS NULL
 UNION ALL SELECT 'esatis' AS table_bronze,           COUNT(*) AS lignes_suspectes FROM esatis WHERE annee_recueil IS NULL OR annee_recueil = '';
 
 SELECT annee_recueil, COUNT(*) AS nb_etablissements FROM esatis GROUP BY annee_recueil;
