@@ -227,7 +227,7 @@ CREATE TABLE activite (
     id_execution              STRING
 ) STORED AS PARQUET;
 
--- Sans identité : nom, prénoms et lieu de naissance restent dans le Bronze
+-- Sans identité : Talend n'extrait ni nom, ni prénoms, ni lieu de naissance
 DROP TABLE IF EXISTS deces;
 CREATE TABLE deces (
     num_deces         BIGINT,
@@ -282,22 +282,27 @@ DROP TABLE IF EXISTS t_localisation;
 CREATE TEMPORARY TABLE t_localisation AS
 SELECT d.id_execution, d.fichier, d.pos_octet, d.contenu,
        d.code_departement, d.departement, d.code_region,
-       txt(r.libelle) AS region,
+       r.region,
        CASE WHEN d.code_departement IS NULL THEN 'cle absente'
             WHEN d.departement IS NULL      THEN 'libelle absent'
-            WHEN txt(r.libelle) IS NULL     THEN 'region introuvable' END AS motif,
-       concat_ws('|', nvl(d.departement, ''), nvl(d.code_region, ''), nvl(txt(r.libelle), '')) AS empreinte
+            WHEN r.region IS NULL           THEN 'region introuvable' END AS motif,
+       concat_ws('|', nvl(d.departement, ''), nvl(d.code_region, ''), nvl(r.region, '')) AS empreinte
 FROM (
+    -- Les fichiers INSEE sont entre guillemets : ils sont retirés ici
     SELECT id_execution,
            INPUT__FILE__NAME           AS fichier,
            BLOCK__OFFSET__INSIDE__FILE AS pos_octet,
            concat_ws(';', dep, reg, libelle) AS contenu,
-           upper(txt(dep)) AS code_departement,
-           txt(libelle)    AS departement,
-           txt(reg)        AS code_region
+           upper(txt(regexp_replace(dep, '"', ''))) AS code_departement,
+           txt(regexp_replace(libelle, '"', ''))    AS departement,
+           txt(regexp_replace(reg, '"', ''))        AS code_region
     FROM bronze.cog_departement
 ) d
-LEFT JOIN bronze.cog_region r ON txt(r.reg) = d.code_region;
+LEFT JOIN (
+    SELECT txt(regexp_replace(reg, '"', ''))     AS code_region,
+           txt(regexp_replace(libelle, '"', '')) AS region
+    FROM bronze.cog_region
+) r ON r.code_region = d.code_region;
 
 DROP TABLE IF EXISTS d_localisation;
 CREATE TEMPORARY TABLE d_localisation AS
@@ -835,27 +840,27 @@ WHERE motif IS NOT NULL;
 
 -- ---------------------------------------------------------------------
 -- DECES (25 millions de lignes)
--- Clé de dédoublonnage : identité + date de décès. L'identité ne sort pas
--- des tables temporaires : ni silver.deces ni silver.rejets ne la contiennent.
+-- Aucune identité n'est extraite par Talend. Clé de dédoublonnage : acte de
+-- décès = (commune du décès, date du décès, numéro d'acte). Le numéro seul
+-- ne suffit pas : chaque mairie numérote ses actes à partir de 1 chaque année.
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_deces;
 CREATE TEMPORARY TABLE t_deces AS
 SELECT id_execution,
        INPUT__FILE__NAME           AS fichier,
        BLOCK__OFFSET__INSIDE__FILE AS pos_octet,
-       concat_ws(';', sexe, date_naissance, date_deces, code_lieu_deces) AS contenu,
+       concat_ws(';', sexe, date_naissance, date_deces, code_lieu_deces, numero_acte_deces) AS contenu,
        CASE trim(sexe) WHEN '1' THEN 'M' WHEN '2' THEN 'F' ELSE 'I' END AS sexe,
        iso_valide(trim(date_naissance)) AS date_naissance,
        CASE WHEN trim(date_naissance) RLIKE '^[0-9]{4}' AND substr(trim(date_naissance), 1, 4) <> '0000'
             THEN CAST(substr(trim(date_naissance), 1, 4) AS INT) END AS annee_naissance,
        iso_valide(trim(date_deces)) AS date_deces,
        code5(code_lieu_deces)       AS code_lieu_deces,
-       concat_ws('|', upper(nvl(txt(nom), '')), upper(nvl(txt(prenom), '')), nvl(trim(sexe), ''),
-                      nvl(trim(date_naissance), ''), upper(nvl(txt(code_lieu_naissance), '')),
-                      nvl(trim(date_deces), '')) AS cle,
-       concat_ws('|', upper(nvl(txt(code_lieu_deces), '')), upper(nvl(txt(lieu_naissance), '')),
-                      upper(nvl(txt(pays_naissance), ''))) AS empreinte,
-       CASE WHEN pays_naissance IS NULL THEN 'nombre de colonnes incorrect' END AS motif
+       concat_ws('|', upper(nvl(txt(code_lieu_deces), '')), nvl(trim(date_deces), ''),
+                      upper(txt(numero_acte_deces))) AS cle,
+       concat_ws('|', nvl(trim(sexe), ''), nvl(trim(date_naissance), '')) AS empreinte,
+       CASE WHEN numero_acte_deces IS NULL     THEN 'nombre de colonnes incorrect'
+            WHEN txt(numero_acte_deces) IS NULL THEN 'cle absente' END AS motif
 FROM bronze.deces;
 
 DROP TABLE IF EXISTS d_deces;
