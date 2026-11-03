@@ -901,31 +901,31 @@ SELECT '20261102_1', l.id_execution, '02_silver', l.flux, from_unixtime(unix_tim
        CASE WHEN nvl(r.rejetees, 0) > 0.05 * l.lues THEN 'ECHEC_SEUIL' ELSE 'OK' END
 FROM (
               SELECT 'localisation'    AS flux, max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_localisation
-    UNION ALL SELECT 'specialite',      max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_specialite
-    UNION ALL SELECT 'diagnostic',      max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_diagnostic
-    UNION ALL SELECT 'professionnel',   max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_professionnel
-    UNION ALL SELECT 'patient',         max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_patient
-    UNION ALL SELECT 'consultation',    max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_consultation
-    UNION ALL SELECT 'hospitalisation', max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_hospitalisation
-    UNION ALL SELECT 'satisfaction',    max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_satisfaction
-    UNION ALL SELECT 'etablissement',   max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_etablissement
-    UNION ALL SELECT 'activite',        max(id_execution), count(*),
-                     CAST(sum(CASE WHEN motif IS NULL AND identifiant_organisation IS NULL THEN 1 ELSE 0 END) AS BIGINT)
+    UNION ALL SELECT 'specialite' AS flux,      max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_specialite
+    UNION ALL SELECT 'diagnostic' AS flux,      max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_diagnostic
+    UNION ALL SELECT 'professionnel' AS flux,   max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_professionnel
+    UNION ALL SELECT 'patient' AS flux,         max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_patient
+    UNION ALL SELECT 'consultation' AS flux,    max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_consultation
+    UNION ALL SELECT 'hospitalisation' AS flux, max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_hospitalisation
+    UNION ALL SELECT 'satisfaction' AS flux,    max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_satisfaction
+    UNION ALL SELECT 'etablissement' AS flux,   max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_etablissement
+    UNION ALL SELECT 'activite' AS flux,        max(id_execution) AS id_execution, count(*) AS lues,
+                     CAST(sum(CASE WHEN motif IS NULL AND identifiant_organisation IS NULL THEN 1 ELSE 0 END) AS BIGINT) AS ignorees
                      FROM t_activite
-    UNION ALL SELECT 'deces',           max(id_execution), count(*), CAST(0 AS BIGINT) FROM t_deces
+    UNION ALL SELECT 'deces' AS flux,           max(id_execution) AS id_execution, count(*) AS lues, CAST(0 AS BIGINT) AS ignorees FROM t_deces
 ) l
 JOIN (
               SELECT 'localisation'    AS flux, count(*) AS ecrites FROM localisation WHERE origine = 'COG'
-    UNION ALL SELECT 'specialite',      count(*) FROM specialite
-    UNION ALL SELECT 'diagnostic',      count(*) FROM diagnostic
-    UNION ALL SELECT 'professionnel',   count(*) FROM professionnel
-    UNION ALL SELECT 'patient',         count(*) FROM patient
-    UNION ALL SELECT 'consultation',    count(*) FROM consultation
-    UNION ALL SELECT 'hospitalisation', count(*) FROM hospitalisation
-    UNION ALL SELECT 'satisfaction',    count(*) FROM satisfaction
-    UNION ALL SELECT 'etablissement',   count(*) FROM etablissement WHERE origine = 'referentiel'
-    UNION ALL SELECT 'activite',        count(*) FROM activite
-    UNION ALL SELECT 'deces',           count(*) FROM deces
+    UNION ALL SELECT 'specialite' AS flux,      count(*) AS ecrites FROM specialite
+    UNION ALL SELECT 'diagnostic' AS flux,      count(*) AS ecrites FROM diagnostic
+    UNION ALL SELECT 'professionnel' AS flux,   count(*) AS ecrites FROM professionnel
+    UNION ALL SELECT 'patient' AS flux,         count(*) AS ecrites FROM patient
+    UNION ALL SELECT 'consultation' AS flux,    count(*) AS ecrites FROM consultation
+    UNION ALL SELECT 'hospitalisation' AS flux, count(*) AS ecrites FROM hospitalisation
+    UNION ALL SELECT 'satisfaction' AS flux,    count(*) AS ecrites FROM satisfaction
+    UNION ALL SELECT 'etablissement' AS flux,   count(*) AS ecrites FROM etablissement WHERE origine = 'referentiel'
+    UNION ALL SELECT 'activite' AS flux,        count(*) AS ecrites FROM activite
+    UNION ALL SELECT 'deces' AS flux,           count(*) AS ecrites FROM deces
 ) e ON e.flux = l.flux
 LEFT JOIN (
     SELECT flux, count(*) AS rejetees FROM rejets GROUP BY flux
