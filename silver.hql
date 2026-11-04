@@ -863,24 +863,38 @@ SELECT id_execution,
             WHEN txt(numero_acte_deces) IS NULL THEN 'cle absente' END AS motif
 FROM bronze.deces;
 
+-- 25 millions de lignes : un GROUP BY sur la clé remplace les fonctions de
+-- fenêtre des autres flux, trop gourmandes en mémoire pour la VM. Dans une
+-- clé sans conflit (emp_min = emp_max), toutes les lignes sont identiques :
+-- min() redonne donc leurs valeurs.
 DROP TABLE IF EXISTS d_deces;
-CREATE TEMPORARY TABLE d_deces AS
-SELECT t.*,
-       ROW_NUMBER() OVER (PARTITION BY cle ORDER BY fichier, pos_octet) AS rn,
-       MIN(empreinte) OVER (PARTITION BY cle) AS emp_min,
-       MAX(empreinte) OVER (PARTITION BY cle) AS emp_max
-FROM t_deces t
-WHERE t.motif IS NULL;
+DROP TABLE IF EXISTS g_deces;
+CREATE TEMPORARY TABLE g_deces AS
+SELECT cle,
+       min(empreinte)       AS emp_min,
+       max(empreinte)       AS emp_max,
+       min(sexe)            AS sexe,
+       min(date_naissance)  AS date_naissance,
+       min(annee_naissance) AS annee_naissance,
+       min(date_deces)      AS date_deces,
+       min(code_lieu_deces) AS code_lieu_deces,
+       max(id_execution)    AS id_execution
+FROM t_deces
+WHERE motif IS NULL
+GROUP BY cle;
 
--- num_deces attribué après dédoublonnage, dans l'ordre des dates de décès
+-- num_deces = AAAAMMJJ du décès x 100000 + rang dans la journée
+-- (0 x 100000 + rang pour les dates incomplètes) : unique, stable d'un
+-- chargement à l'autre pour une même date, sans tri global des 25 millions.
 INSERT OVERWRITE TABLE deces
-SELECT ROW_NUMBER() OVER (ORDER BY d.id_temps, d.cle) AS num_deces,
+SELECT CAST(CASE WHEN d.id_temps = -1 THEN 0 ELSE d.id_temps END AS BIGINT) * 100000
+         + ROW_NUMBER() OVER (PARTITION BY d.id_temps ORDER BY d.cle) AS num_deces,
        d.sexe, d.date_naissance, d.annee_naissance, d.date_deces, d.id_temps,
        d.code_lieu_deces, l.code_departement, d.id_execution
 FROM (
-    SELECT x.*, vers_id_temps(x.date_deces) AS id_temps
-    FROM d_deces x
-    WHERE x.emp_min = x.emp_max AND x.rn = 1
+    SELECT g.*, vers_id_temps(g.date_deces) AS id_temps
+    FROM g_deces g
+    WHERE g.emp_min = g.emp_max
 ) d
 LEFT JOIN localisation l ON l.code_departement = dep_commune(d.code_lieu_deces);
 
@@ -890,8 +904,10 @@ SELECT r.id_execution, '20261102_1', '02_silver', r.fichier, r.pos_octet, r.cont
 FROM (
     SELECT id_execution, fichier, pos_octet, contenu, motif FROM t_deces WHERE motif IS NOT NULL
     UNION ALL
-    SELECT id_execution, fichier, pos_octet, contenu, 'meme cle contenu different' AS motif
-    FROM d_deces WHERE emp_min <> emp_max
+    SELECT t.id_execution, t.fichier, t.pos_octet, t.contenu, 'meme cle contenu different' AS motif
+    FROM t_deces t
+    JOIN (SELECT cle FROM g_deces WHERE emp_min <> emp_max) c ON c.cle = t.cle
+    WHERE t.motif IS NULL
 ) r;
 
 -- =====================================================================
