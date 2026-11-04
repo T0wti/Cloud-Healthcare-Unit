@@ -184,7 +184,6 @@ LOCATION '/bronze/cog/departement';
 
 DROP TABLE IF EXISTS cog_region;
 CREATE EXTERNAL TABLE cog_region (
-    dep           STRING COMMENT 'Vide pour les régions (schéma commun du job J15)',
     reg           STRING,
     libelle       STRING,
     id_execution  STRING
