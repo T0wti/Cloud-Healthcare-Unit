@@ -3,7 +3,9 @@
 -- Exécution : beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 01_bronze.hql
 --
 -- Les tables pointent sur les fichiers déposés par les jobs Talend J10 à J15 :
--- séparateur ';', sans en-tête, sans guillemets, UTF-8.
+-- point-virgule comme séparateur, sans en-tête, sans guillemets, UTF-8.
+-- Le séparateur s'écrit '\073' (son code octal) : beeline peut couper une
+-- requête sur un point-virgule écrit en clair.
 -- Toutes les colonnes sont en STRING : le typage se fait au passage en Silver.
 -- Tables EXTERNAL : un DROP TABLE ne supprime pas les fichiers de HDFS.
 -- =====================================================================
@@ -28,7 +30,7 @@ CREATE EXTERNAL TABLE patient (
     date_naissance     STRING COMMENT 'Format source M/J/AAAA',
     id_execution       STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/postgres/patient';
 
@@ -42,7 +44,7 @@ CREATE EXTERNAL TABLE consultation (
     heure_debut        STRING,
     id_execution       STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/postgres/consultation';
 
@@ -54,7 +56,7 @@ CREATE EXTERNAL TABLE professionnel (
     code_specialite            STRING,
     id_execution               STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/postgres/professionnel';
 
@@ -64,7 +66,7 @@ CREATE EXTERNAL TABLE specialites (
     specialite       STRING,
     id_execution     STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/postgres/specialites';
 
@@ -74,7 +76,7 @@ CREATE EXTERNAL TABLE diagnostics (
     diagnostic    STRING,
     id_execution  STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/postgres/diagnostics';
 
@@ -91,7 +93,7 @@ CREATE EXTERNAL TABLE hospitalisations (
     jour_hospitalisation      STRING COMMENT 'Durée du séjour en jours',
     id_execution              STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/hospitalisations';
 
@@ -108,7 +110,7 @@ CREATE EXTERNAL TABLE etablissement (
     code_postal                     STRING,
     id_execution                    STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/referentiel/etablissement';
 
@@ -118,7 +120,7 @@ CREATE EXTERNAL TABLE activite (
     identifiant_organisation  STRING,
     id_execution              STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/referentiel/activite';
 
@@ -147,24 +149,25 @@ CREATE EXTERNAL TABLE esatis (
     nb_reco_brut                STRING,
     annee_recueil               STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/esatis';
 
 -- ---------------------------------------------------------------------
 -- Source 4 : décès INSEE (job J14_ING_DECES)
 -- Talend n'extrait aucune identité (ni nom, ni prénoms, ni lieu de naissance).
+-- Ordre des colonnes = sortie de J14 : date_deces avant date_naissance.
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS deces;
 CREATE EXTERNAL TABLE deces (
     id_execution         STRING,
     sexe                 STRING,
-    date_naissance       STRING,
     date_deces           STRING COMMENT 'Format source AAAA-MM-JJ',
+    date_naissance       STRING,
     code_lieu_deces      STRING COMMENT 'Code commune INSEE',
     numero_acte_deces    STRING COMMENT 'Numéroté par commune et par année'
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/deces';
 
@@ -178,7 +181,7 @@ CREATE EXTERNAL TABLE cog_departement (
     libelle       STRING,
     id_execution  STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/cog/departement';
 
@@ -188,7 +191,7 @@ CREATE EXTERNAL TABLE cog_region (
     libelle       STRING,
     id_execution  STRING
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY ';'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/cog/region';
 
@@ -208,7 +211,7 @@ UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS nb_lignes FROM 
 UNION ALL SELECT 'cog_departement' AS table_bronze,  COUNT(*) AS nb_lignes FROM cog_departement
 UNION ALL SELECT 'cog_region' AS table_bronze,       COUNT(*) AS nb_lignes FROM cog_region;
 
--- Lignes mal découpées : un ';' dans un texte décale les colonnes.
+-- Lignes mal découpées : un point-virgule dans un texte décale les colonnes.
 -- La dernière colonne (id_execution ou code) doit toujours être remplie.
 SELECT 'etablissement' AS table_bronze, COUNT(*) AS lignes_suspectes FROM etablissement WHERE id_execution IS NULL OR id_execution = ''
 UNION ALL SELECT 'hospitalisations' AS table_bronze, COUNT(*) AS lignes_suspectes FROM hospitalisations WHERE id_execution IS NULL OR id_execution = ''
