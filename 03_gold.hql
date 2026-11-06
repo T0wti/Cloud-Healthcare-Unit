@@ -19,7 +19,7 @@ SET spark.yarn.driver.memoryOverhead=384;
 -- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03_gold.hql > 03.log 2>&1 &
 --
 -- Identifiants écrits en dur, à remplacer partout avant une nouvelle exécution :
---   '20261104_2' : exécution Silver contrôlée au début du script
+--   '20261104_1' : exécution Silver contrôlée au début du script
 --   '20261105_1' : exécution Gold, écrite dans les rejets, l'audit et les contrôles
 --
 -- Règles appliquées (livrable, sections 2.3, 2.5, 2.7, 2.8, fiches 3.x et 4.x) :
@@ -62,7 +62,7 @@ USE gold;
 -- ---------------------------------------------------------------------
 SELECT assert_true(count(*) = 11 AND sum(CASE WHEN statut = 'OK' THEN 1 ELSE 0 END) = 11) AS silver_conforme
 FROM silver.audit
-WHERE id_silver = '20261104_2';
+WHERE id_silver = '20261104_1';
 
 -- =====================================================================
 -- Tables Gold
