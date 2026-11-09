@@ -78,7 +78,7 @@ CREATE TEMPORARY MACRO dep_postal(cp STRING)
          ELSE substr(cp, 1, 2) END;
 
 -- Département d'un FINESS (établissements ajoutés depuis e-Satis)
--- Les FINESS d'outre-mer (9701 à 9704, 9805) ne suivent pas le COG.
+-- Les FINESS d'outre-mer (9701 à 9704, 9805) ne suivent pas le COG
 CREATE TEMPORARY MACRO dep_finess(f STRING)
     CASE substr(f, 1, 4)
          WHEN '9701' THEN '971' WHEN '9702' THEN '972' WHEN '9703' THEN '973'
@@ -86,7 +86,7 @@ CREATE TEMPORARY MACRO dep_finess(f STRING)
          ELSE CASE WHEN upper(substr(f, 1, 2)) IN ('2A', '2B') THEN upper(substr(f, 1, 2))
                    ELSE substr(f, 1, 2) END END;
 
--- Nom de région sans accent, espace ni tiret, pour comparer e-Satis et le COG (Ile de France et Île-de-France -> iledefrance).
+-- Nom de région sans accent, espace ni tiret, pour comparer e-Satis et le COG (Ile de France et Île-de-France -> iledefrance)
 CREATE TEMPORARY MACRO cle_region(s STRING)
     regexp_replace(translate(lower(s), 'àâäéèêëîïôöùûüç', 'aaaeeeeiioouuuc'), '[^a-z]', '');
 
@@ -158,7 +158,7 @@ CREATE TABLE professionnel (
 ) STORED AS PARQUET;
 
 -- Patients (base de DIM_PATIENT)
--- La date complète sert au calcul de l'âge dans les faits du Gold.
+-- La date complète sert au calcul de l'âge dans les faits du Gold
 DROP TABLE IF EXISTS patient;
 CREATE TABLE patient (
     id_patient_pseudo  STRING,
@@ -307,8 +307,8 @@ CREATE TABLE IF NOT EXISTS audit (
 -- 2. d_<flux> : lignes valides, avec rn (rang dans la clé) et la plus petite et la plus grande empreinte de la clé (emp_min, emp_max)
 --    emp_min = emp_max  -> doublons exacts, on garde rn = 1
 --    emp_min <> emp_max -> contenus différents, toute la clé part en rejet
--- 3. INSERT OVERWRITE de la table Silver et de sa partition de rejets.
--- Le DROP avant chaque table temporaire permet de relancer le script dans la même session.
+-- 3. INSERT OVERWRITE de la table Silver et de sa partition de rejets
+-- Le DROP avant chaque table temporaire permet de relancer le script dans la même session
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -873,7 +873,7 @@ SELECT * FROM t_etab_esatis;
 
 -- ---------------------------------------------------------------------
 -- FLUX ACTIVITE : rattachement professionnel -> organisation
--- Clé : (id_prof_pseudo, identifiant_organisation). Le contenu se résume à la clé, un doublon est donc forcément exact.
+-- Clé : (id_prof_pseudo, identifiant_organisation). Le contenu se résume à la clé, un doublon est donc forcément exact
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_activite;
 CREATE TEMPORARY TABLE t_activite AS
@@ -1074,7 +1074,7 @@ FROM etablissement
 GROUP BY origine;
 
 -- Contrôle 4 : seuil de 5 % de rejets
--- assert_true fait échouer le script si un flux est en ECHEC_SEUIL : le Gold ne doit alors pas être lancé. NULL = tout est conforme.
+-- assert_true fait échouer le script si un flux est en ECHEC_SEUIL : le Gold ne doit alors pas être lancé. NULL = tout est conforme
 SELECT assert_true(count(*) = 0) AS seuil_rejets_respecte
 FROM audit
 WHERE id_silver = '20261104_1' AND statut <> 'OK';
