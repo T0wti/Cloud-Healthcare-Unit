@@ -15,26 +15,21 @@ SET spark.driver.memory=512m;
 SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- Projet CHU - Étape 3 : du Silver au Gold (constellation Parquet)
--- Prérequis : 02a, 02b et 02c exécutés sans échec.
--- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03_gold.hql > 03.log 2>&1 &
+-- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f gold.hql > 03.log 2>&1 &
 --
--- Identifiants écrits en dur, à remplacer partout avant une nouvelle exécution :
---   '20261104_1' : exécution Silver contrôlée au début du script
---   '20261105_1' : exécution Gold, écrite dans les rejets, l'audit et les contrôles
+-- Identifiants écrits en dur, à remplacer partout avant une nouvelle exécution
 --
--- Règles appliquées (livrable, sections 2.3, 2.5, 2.7, 2.8, fiches 3.x et 4.x) :
+-- Règles appliquées :
 --   clés       : une clé attribuée ne change jamais, nouvelle entité = plus grande clé + 1
 --   membres    : -1 Inconnu (toutes les dimensions), -2 Plusieurs (établissement, localisation)
 --   faits      : clé étrangère jamais NULL, absente ou introuvable = -1
---   partitions : annee = id_temps DIV 10000, -1 quand id_temps vaut -1,
---                seules les partitions reçues sont remplacées
+--   partitions : annee = id_temps DIV 10000, -1 quand id_temps vaut -1, seules les partitions reçues sont remplacées
 --   rejets     : silver.rejets, partitions gold_<table>
---   audit      : silver.audit (job 03_gold) et gold.controle_membres
+--   audit      : silver.audit et gold.controle_membres
 --
--- La date de naissance et les pseudonymes ne sont pas repris dans le Gold.
 -- Écarts assumés avec le dictionnaire :
 --   num_deces est en BIGINT (AAAAMMJJ x 100000 + rang) et non en INT
---   les faits portent en plus la colonne de partition annee (section 2.8)
+--   les faits portent en plus la colonne de partition annee
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -45,7 +40,7 @@ CREATE TEMPORARY MACRO age_revolu(naiss STRING, evt STRING)
     CAST(substr(evt, 1, 4) AS INT) - CAST(substr(naiss, 1, 4) AS INT)
       - CASE WHEN substr(evt, 6, 5) < substr(naiss, 6, 5) THEN 1 ELSE 0 END;
 
--- Âge gardé seulement de 0 à 120 ans, NULL sinon (section 2.5)
+-- Âge gardé seulement de 0 à 120 ans, NULL sinon
 CREATE TEMPORARY MACRO age_borne(a INT)
     CASE WHEN a BETWEEN 0 AND 120 THEN a END;
 
@@ -57,8 +52,8 @@ CREATE DATABASE IF NOT EXISTS gold COMMENT 'Entrepôt décisionnel : constellati
 USE gold;
 
 -- ---------------------------------------------------------------------
--- Contrôle préalable (section 2.7) : le Gold n'est pas écrit si l'exécution
--- Silver indiquée est absente ou si un de ses 11 flux dépasse le seuil.
+-- Contrôle préalable : le Gold n'est pas écrit si l'exécution
+-- Silver indiquée est absente ou si un de ses 11 flux dépasse le seuil
 -- ---------------------------------------------------------------------
 SELECT assert_true(count(*) = 11 AND sum(CASE WHEN statut = 'OK' THEN 1 ELSE 0 END) = 11) AS silver_conforme
 FROM silver.audit
@@ -174,7 +169,7 @@ CREATE TABLE IF NOT EXISTS fait_deces (
     nb_deces         INT
 ) PARTITIONED BY (annee INT) STORED AS PARQUET;
 
--- Part des membres -1 et -2 dans chaque fait, d'un chargement à l'autre (section 2.8)
+-- Part des membres -1 et -2 dans chaque fait, d'un chargement à l'autre 
 CREATE TABLE IF NOT EXISTS controle_membres (
     id_gold             STRING,
     date_execution      STRING,
@@ -201,8 +196,7 @@ CREATE TABLE IF NOT EXISTS controle_membres (
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- DIM_TEMPS (3.1) : du 01/01/1880 au 31/12/2030, soit 55 152 jours
--- Le 01/01/1900 est un lundi : il sert de repère pour le jour de la semaine.
+-- DIM_TEMPS : du 01/01/1880 au 31/12/2030, soit 55 152 jours
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_temps
 SELECT u.id_temps, u.date_complete, u.jour, u.jour_semaine, u.libelle_jour, u.semaine,
@@ -240,7 +234,7 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_LOCALISATION (3.2)
+-- DIM_LOCALISATION
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_localisation
 SELECT u.id_localisation, u.code_departement, u.departement, u.code_region, u.region
@@ -277,7 +271,7 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_ETABLISSEMENT (3.3)
+-- DIM_ETABLISSEMENT 
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_etablissement
 SELECT u.id_etablissement, u.identifiant_organisation, u.num_finess_geo, u.num_finess_juridique,
@@ -326,9 +320,8 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_PATIENT (3.4)
--- Les clés sont dans silver.cle_patient. Chaque clé garde sa ligne, même si
--- le patient a disparu de la source : un fait ne pointe jamais dans le vide.
+-- DIM_PATIENT
+-- Les clés sont dans silver.cle_patient. Chaque clé garde sa ligne, même si le patient a disparu de la source : un fait ne pointe jamais dans le vide.
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_patient
 SELECT u.id_patient, u.sexe, u.annee_naissance
@@ -342,8 +335,8 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_DIAGNOSTIC (3.5 et annexe CIM-10)
--- Une catégorie hors de toute plage part en rejet.
+-- DIM_DIAGNOSTIC
+-- Une catégorie hors de toute plage part en rejet
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_dim_diagnostic;
 CREATE TEMPORARY TABLE t_dim_diagnostic AS
@@ -415,8 +408,8 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_PROFESSIONNEL (3.6)
--- Les clés sont dans silver.cle_professionnel, même logique que DIM_PATIENT.
+-- DIM_PROFESSIONNEL 
+-- Les clés sont dans silver.cle_professionnel, même logique que DIM_PATIENT
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_professionnel
 SELECT u.id_professionnel, u.profession, u.code_specialite, u.specialite, u.categorie_professionnelle
@@ -469,13 +462,12 @@ FROM (
 
 -- =====================================================================
 -- FAITS
--- DISTRIBUTE BY annee regroupe chaque année dans une seule tâche : peu de
--- fichiers Parquet ouverts à la fois, donc moins de mémoire utilisée.
+-- DISTRIBUTE BY annee regroupe chaque année dans une seule tâche : peu de fichiers Parquet ouverts à la fois, donc moins de mémoire utilisée
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- FAIT_CONSULTATION (4.1)
--- Numéro illisible ou heure vide -> rejet.
+-- FAIT_CONSULTATION
+-- Numéro illisible ou heure vide -> rejet
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_fait_consultation')
 SELECT id_execution, '20261105_1', '03_gold', 'silver.consultation', CAST(NULL AS BIGINT),
@@ -514,8 +506,8 @@ FROM (
 DISTRIBUTE BY x.annee;
 
 -- ---------------------------------------------------------------------
--- FAIT_HOSPITALISATION (4.2)
--- La durée a déjà été contrôlée en Silver.
+-- FAIT_HOSPITALISATION
+-- La durée a déjà été contrôlée en Silver
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_fait_hospitalisation')
 SELECT id_execution, '20261105_1', '03_gold', 'silver.hospitalisation', CAST(NULL AS BIGINT),
@@ -549,8 +541,8 @@ FROM (
 DISTRIBUTE BY x.annee;
 
 -- ---------------------------------------------------------------------
--- FAIT_SATISFACTION (4.3)
--- Les notes passent de DOUBLE à DECIMAL(5,2).
+-- FAIT_SATISFACTION
+-- Les notes passent de DOUBLE à DECIMAL(5,2)
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE fait_satisfaction PARTITION (annee)
 SELECT x.id_etablissement, x.id_temps, x.id_localisation, x.classement, x.note_satisfaction, x.nb_avis,
@@ -578,11 +570,10 @@ FROM (
 DISTRIBUTE BY x.annee;
 
 -- ---------------------------------------------------------------------
--- FAIT_DECES (4.4)
--- Le code du département est déjà contrôlé en Silver.
--- Âge : années révolues, à défaut année du décès - année de naissance.
--- 30 tâches de réduction : les dizaines d'années de décès se répartissent
--- entre elles, et chaque tâche garde peu de fichiers Parquet ouverts.
+-- FAIT_DECES
+-- Le code du département est déjà contrôlé en Silver
+-- Âge : années révolues, à défaut année du décès, année de naissance
+-- 30 tâches de réduction : les dizaines d'années de décès se répartissent entre elles, et chaque tâche garde peu de fichiers Parquet ouverts
 -- ---------------------------------------------------------------------
 SET mapreduce.job.reduces=30;
 
@@ -605,9 +596,8 @@ DISTRIBUTE BY x.annee;
 SET mapreduce.job.reduces=-1;
 
 -- =====================================================================
--- AUDIT ET CONTRÔLES (section 2.8)
--- Faits : lues = écrites + rejetées. Dimensions : l'écart peut être négatif
--- si des entités disparues de la source sont conservées.
+-- AUDIT ET CONTRÔLES 
+-- Faits : lues = écrites + rejetées. Dimensions : l'écart peut être négatif si des entités disparues de la source sont conservées
 -- =====================================================================
 INSERT INTO TABLE silver.audit
 SELECT '20261105_1', l.id_execution, '03_gold', l.flux, from_unixtime(unix_timestamp()),
@@ -701,31 +691,31 @@ FROM (
 -- ---------------------------------------------------------------------
 -- Contrôles affichés
 -- ---------------------------------------------------------------------
--- 1) Bilan par table
+-- Bilan par table
 SELECT flux, lignes_lues, lignes_ecrites, lignes_rejetees, lignes_doublon, taux_rejet, statut
 FROM silver.audit
 WHERE id_silver = '20261105_1'
 ORDER BY flux;
 
--- 2) Membres -1 et -2 dans les faits
+-- Membres -1 et -2 dans les faits
 SELECT fait, nb_lignes, patient_m1, diagnostic_m1, etablissement_m1, etablissement_m2,
        temps_m1, localisation_m1, localisation_m2, professionnel_m1, age_null
 FROM controle_membres
 WHERE id_gold = '20261105_1'
 ORDER BY fait;
 
--- 3) Calendrier : 55 153 lignes attendues (55 152 jours + le membre -1)
+-- Calendrier : 55 153 lignes attendues (55 152 jours + le membre -1)
 SELECT count(*) AS nb_lignes, min(id_temps) AS id_min, max(id_temps) AS id_max,
        sum(CASE WHEN est_weekend THEN 1 ELSE 0 END) AS jours_weekend
 FROM dim_temps;
 
--- 4) Dates repères : le 15/03/2019 est un vendredi, le 01/01/1880 un jeudi
+-- Dates repères : le 15/03/2019 est un vendredi, le 01/01/1880 un jeudi
 SELECT id_temps, date_complete, jour_semaine, libelle_jour, semaine, libelle_mois, trimestre, est_weekend
 FROM dim_temps
 WHERE id_temps IN (20190315, 18800101, 20301231)
 ORDER BY id_temps;
 
--- 5) Dates des faits absentes du calendrier : 0 attendu partout
+-- Dates des faits absentes du calendrier : 0 attendu partout
 SELECT c.fait, c.orphelins
 FROM (
     SELECT 'fait_consultation' AS fait, count(*) AS orphelins
@@ -741,7 +731,7 @@ FROM (
     FROM fait_deces f LEFT JOIN dim_temps t ON t.id_temps = f.id_temps WHERE t.id_temps IS NULL
 ) c;
 
--- 6) Le seuil et l'équilibre des faits : fait échouer beeline en cas de problème
+-- Le seuil et l'équilibre des faits : fait échouer beeline en cas de problème
 SELECT assert_true(count(*) = 0) AS gold_conforme
 FROM silver.audit
 WHERE id_silver = '20261105_1' AND statut <> 'OK';
