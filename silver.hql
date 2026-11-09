@@ -10,70 +10,25 @@ SET spark.yarn.executor.memoryOverhead=384;
 SET spark.driver.memory=512m;
 SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
--- PROJET CHU - ÉTAPE 2 : DU BRONZE AU SILVER
--- =====================================================================
--- Réglages ci-dessus (ils doivent rester en tête, sans commentaire avant
--- eux, sinon Hue les envoie au parseur SQL et Hive répond KW_ROLE)
---   nonstrict      : autorise le CROSS JOIN de l'audit et des clés
---   convert.join   : petites tables jointes en mémoire (COG, spécialités)
---   parquet.*      : compression Snappy, blocs de 32 Mo pour la VM
---   spark.*        : Hive on Spark dimensionné pour les 3 Go de YARN
---                    (driver 1 Go + exécuteur 1,5 Go). Pour revenir à
---                    MapReduce : remplacer ces lignes par
---                    SET hive.execution.engine=mr
+-- Projet CHU - Étape 2 : du Bronze au Silver
+-- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f silver.hql > silver.log 2>&1 &
 --
--- Exécution recommandée (en terminal sur la VM, sans passer par Hue)
---   nohup hive -f ~/02_silver.hql > ~/silver.log 2>&1 &
---   tail -f ~/silver.log
+-- Identifiant d'exécution, écrit en dur dans les rejets, l'audit et le contrôle final : à remplacer partout avant chaque nouvelle exécution, sinon l'audit mélange deux lancements.
 --
--- Identifiant de cette exécution : '20261104_1', écrit en dur dans les
--- rejets, l'audit et le contrôle final. Le remplacer partout avant
--- chaque nouvelle exécution, sinon l'audit mélange deux lancements.
+-- Tables de données : supprimées et reconstruites à chaque exécution.
+-- cle_patient, cle_professionnel, rejets et audit : créées une seule fois et conservées.
 --
--- Règles appliquées (livrable, sections 2.2 à 2.7)
---   Typage        dates converties selon le format de chaque source,
---                 virgule décimale remplacée par un point
---   Normalisation espaces de bord retirés, chaîne vide = valeur absente,
---                 FINESS sur 9 caractères, code commune sur 5,
---                 département déduit du code commune (règle 2.4)
---   Unicité       chaque flux est contrôlé sur sa clé. Un doublon exact
---                 est supprimé, une même clé avec un contenu différent
---                 part en rejet
---   Rejets        silver.rejets, une partition par flux, avec le motif.
---                 Aucune ligne n'est supprimée en silence
---   Audit         silver.audit, avec le contrôle
---                 lues = écrites + rejetées + doublons + ignorées
---   Seuil         plus de 5 % de rejets sur un flux fait échouer le
---                 script en fin d'exécution : le Gold ne doit pas suivre
---
--- Ce qui est recalculé et ce qui est conservé
---   Les tables de données sont supprimées puis reconstruites à partir du
---   Bronze à chaque exécution. Les tables cle_patient, cle_professionnel,
---   rejets et audit sont créées une seule fois et conservées.
---
--- Dates
---   Hive 1.1 ne sait pas écrire de DATE en Parquet. Les dates sont donc
---   gardées en texte AAAA-MM-JJ, avec leur id_temps AAAAMMJJ (clé de
---   DIM_TEMPS), qui vaut -1 si la date est absente ou invalide.
---
--- Compatibilité avec le client hive en ligne de commande
---   Ce client découpe le script à chaque point-virgule, même entre
---   guillemets. Le séparateur des contenus rejetés est donc écrit '\073',
---   code octal du point-virgule, et les commentaires n'en contiennent pas.
 -- =====================================================================
 
 -- =====================================================================
--- MACROS DE NETTOYAGE
--- Fonctions réutilisées par tous les flux, valables pour la session.
+-- MACROS DE NETTOYAGE (valables pour la session)
 -- =====================================================================
 
 -- Texte : espaces de début et de fin retirés, chaîne vide -> NULL
 CREATE TEMPORARY MACRO txt(s STRING)
     CASE WHEN trim(s) = '' THEN NULL ELSE trim(s) END;
 
--- Date AAAA-MM-JJ réelle, sinon NULL
--- La conversion aller-retour refuse les dates impossibles comme le
--- 30 février, que Java aurait sinon reportées au 2 mars.
+-- Date AAAA-MM-JJ réelle, sinon NULL. Refuse les dates impossibles (exemple : 30 février).
 CREATE TEMPORARY MACRO iso_valide(s STRING)
     CASE WHEN s RLIKE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
           AND from_unixtime(unix_timestamp(s, 'yyyy-MM-dd'), 'yyyy-MM-dd') = s
@@ -97,14 +52,12 @@ CREATE TEMPORARY MACRO mja_vers_iso(s STRING)
 CREATE TEMPORARY MACRO vers_id_temps(iso STRING)
     CASE WHEN iso IS NULL THEN -1 ELSE CAST(regexp_replace(iso, '-', '') AS INT) END;
 
--- Code commune ou code postal ramené à 5 caractères
--- Excel a parfois retiré le zéro de tête (1451 au lieu de 01451).
--- Les codes corses (2A004) sont acceptés, toute autre forme donne NULL.
+-- Code commune ou code postal sur 5 caractères (zéro de tête perdu par Excel). Codes corses (2A004) acceptés, toute autre forme -> NULL.
 CREATE TEMPORARY MACRO code5(c STRING)
     CASE WHEN upper(trim(c)) RLIKE '^[0-9][0-9AB][0-9]{2,3}$'
          THEN lpad(upper(trim(c)), 5, '0') END;
 
--- Département d'un code commune INSEE (règle 2.4 du livrable)
+-- Département d'un code commune INSEE 
 --   99...       -> 99 (étranger)
 --   97... 98... -> 3 premiers caractères (outre-mer)
 --   2A... 2B... -> 2A ou 2B (Corse)
@@ -117,17 +70,15 @@ CREATE TEMPORARY MACRO dep_commune(c STRING)
          WHEN upper(substr(c, 1, 2)) IN ('2A', '2B') THEN upper(substr(c, 1, 2))
          ELSE substr(c, 1, 2) END;
 
--- Département d'un code postal, utilisé à défaut de code commune
--- Corse : 20000 à 20199 pour la Corse-du-Sud, au-delà pour la Haute-Corse.
+-- Département d'un code postal, à défaut de code commune
 CREATE TEMPORARY MACRO dep_postal(cp STRING)
     CASE WHEN cp IS NULL THEN NULL
          WHEN cp LIKE '97%' OR cp LIKE '98%' THEN substr(cp, 1, 3)
          WHEN cp LIKE '20%' THEN CASE WHEN cp < '20200' THEN '2A' ELSE '2B' END
          ELSE substr(cp, 1, 2) END;
 
--- Département d'un numéro FINESS (établissements ajoutés depuis e-Satis)
--- Les FINESS d'outre-mer commencent par 9701 à 9704 et 9805, ce qui ne
--- correspond pas directement aux codes du COG (971 à 974 et 976).
+-- Département d'un FINESS (établissements ajoutés depuis e-Satis)
+-- Les FINESS d'outre-mer (9701 à 9704, 9805) ne suivent pas le COG.
 CREATE TEMPORARY MACRO dep_finess(f STRING)
     CASE substr(f, 1, 4)
          WHEN '9701' THEN '971' WHEN '9702' THEN '972' WHEN '9703' THEN '973'
@@ -135,9 +86,7 @@ CREATE TEMPORARY MACRO dep_finess(f STRING)
          ELSE CASE WHEN upper(substr(f, 1, 2)) IN ('2A', '2B') THEN upper(substr(f, 1, 2))
                    ELSE substr(f, 1, 2) END END;
 
--- Nom de région comparable entre e-Satis et le COG
--- Minuscules, sans accent, sans espace ni tiret : « Ile de France » et
--- « Île-de-France » donnent tous deux iledefrance.
+-- Nom de région sans accent, espace ni tiret, pour comparer e-Satis et le COG (Ile de France et Île-de-France -> iledefrance).
 CREATE TEMPORARY MACRO cle_region(s STRING)
     regexp_replace(translate(lower(s), 'àâäéèêëîïôöùûüç', 'aaaeeeeiioouuuc'), '[^a-z]', '');
 
@@ -146,8 +95,7 @@ CREATE TEMPORARY MACRO code_cim(s STRING)
     CASE WHEN regexp_replace(upper(s), '\\s', '') = '' THEN NULL
          ELSE regexp_replace(upper(s), '\\s', '') END;
 
--- Nombre écrit avec une virgule ou un point décimal
--- NULL si la valeur est vide ou illisible.
+-- Nombre avec virgule ou point décimal, NULL si vide ou illisible
 CREATE TEMPORARY MACRO num(s STRING)
     CAST(regexp_replace(trim(s), ',', '.') AS DOUBLE);
 
@@ -163,7 +111,7 @@ CREATE TEMPORARY MACRO hors_0_100(x DOUBLE)
 USE silver;
 
 -- =====================================================================
--- STRUCTURE DES TABLES SILVER (Parquet)
+-- TABLES SILVER (Parquet)
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -210,8 +158,7 @@ CREATE TABLE professionnel (
 ) STORED AS PARQUET;
 
 -- Patients (base de DIM_PATIENT)
--- La date de naissance complète reste en Silver : le Gold n'en garde
--- que l'année, mais elle sert au calcul de l'âge dans les faits.
+-- La date complète sert au calcul de l'âge dans les faits du Gold.
 DROP TABLE IF EXISTS patient;
 CREATE TABLE patient (
     id_patient_pseudo  STRING,
@@ -247,8 +194,7 @@ CREATE TABLE hospitalisation (
     id_execution              STRING
 ) STORED AS PARQUET;
 
--- Résultats e-Satis, un établissement et une année par ligne
--- (base de FAIT_SATISFACTION)
+-- Résultats e-Satis, un établissement et une année par ligne (base de FAIT_SATISFACTION)
 DROP TABLE IF EXISTS satisfaction;
 CREATE TABLE satisfaction (
     identifiant_organisation  STRING COMMENT 'F + finess_geo',
@@ -272,10 +218,7 @@ CREATE TABLE satisfaction (
     id_execution              STRING
 ) STORED AS PARQUET;
 
--- Organisations (base de DIM_ETABLISSEMENT)
--- Sert aussi de table de rattachement établissement -> département pour
--- les faits. Contient le référentiel, plus les établissements notés par
--- e-Satis qui en sont absents.
+-- Organisations (base de DIM_ETABLISSEMENT) : le référentiel, plus les établissements notés par e-Satis qui en sont absents.
 DROP TABLE IF EXISTS etablissement;
 CREATE TABLE etablissement (
     identifiant_organisation  STRING,
@@ -291,9 +234,7 @@ CREATE TABLE etablissement (
     id_execution              STRING
 ) STORED AS PARQUET;
 
--- Couples (professionnel, organisation) dédoublonnés
--- Permet au Gold de rattacher chaque consultation à un établissement :
--- aucune organisation -> -1, une seule -> elle, plusieurs -> -2.
+-- Couples (professionnel, organisation) dédoublonnés. Le Gold en déduit l'établissement d'une consultation : aucun -> -1, un -> lui, plusieurs -> -2.
 DROP TABLE IF EXISTS activite;
 CREATE TABLE activite (
     id_prof_pseudo            STRING,
@@ -320,11 +261,7 @@ CREATE TABLE deces (
 -- Tables permanentes : créées une seule fois, jamais supprimées
 -- ---------------------------------------------------------------------
 
--- Correspondances pseudonyme -> clé de substitution (fiches 3.4 et 3.6)
--- Une clé attribuée ne change plus : seuls les nouveaux pseudonymes sont
--- ajoutés, en fin de script. Le Gold lit ces clés pour DIM_PATIENT,
--- DIM_PROFESSIONNEL et les faits. Attention : un DROP DATABASE silver
--- CASCADE les effacerait et toutes les clés seraient renumérotées.
+-- Pseudonyme -> clé de substitution
 CREATE TABLE IF NOT EXISTS cle_patient (
     id_patient_pseudo  STRING,
     id_patient         INT
@@ -335,9 +272,8 @@ CREATE TABLE IF NOT EXISTS cle_professionnel (
     id_professionnel  INT
 ) STORED AS PARQUET;
 
--- Lignes écartées, une partition par flux (section 2.7)
--- pos_octet donne la position de la ligne dans le fichier Bronze, et non
--- son numéro : Hive ne connaît pas les numéros de ligne d'un fichier.
+-- Lignes écartées, une partition par flux
+-- pos_octet : position de la ligne dans le fichier Bronze (Hive ne connaît pas les numéros de ligne).
 CREATE TABLE IF NOT EXISTS rejets (
     id_execution  STRING,
     id_silver     STRING,
@@ -349,7 +285,7 @@ CREATE TABLE IF NOT EXISTS rejets (
     date_rejet    STRING
 ) PARTITIONED BY (flux STRING) STORED AS PARQUET;
 
--- Journal des exécutions, une ligne par flux et par lancement (section 2.8)
+-- Journal des exécutions, une ligne par flux et par lancement
 CREATE TABLE IF NOT EXISTS audit (
     id_silver        STRING,
     id_execution     STRING,
@@ -367,25 +303,12 @@ CREATE TABLE IF NOT EXISTS audit (
 
 -- =====================================================================
 -- MÉTHODE COMMUNE À CHAQUE FLUX
---
--- 1. t_<flux> (table temporaire) : une ligne par ligne du Bronze, avec
---    les valeurs nettoyées, le motif de rejet éventuel (NULL si la ligne
---    est valide), et deux colonnes techniques :
---      fichier, pos_octet, contenu : pour retrouver la ligne d'origine
---      empreinte : concaténation des valeurs hors clé
---
--- 2. d_<flux> (table temporaire) : lignes valides seulement, avec
---      rn       : numéro de la ligne parmi celles de même clé
---      emp_min et emp_max : plus petite et plus grande empreinte de la clé
---    Si emp_min = emp_max, toutes les lignes de la clé sont identiques :
---    on garde la première (rn = 1), les autres sont des doublons exacts.
---    Si emp_min <> emp_max, la clé a plusieurs contenus : toutes ses
---    lignes partent en rejet, faute de savoir laquelle est la bonne.
---
--- 3. INSERT OVERWRITE de la table Silver et de la partition de rejets.
---
--- Les tables temporaires disparaissent à la fin de la session. Le DROP
--- placé avant chacune permet de relancer le script dans la même session.
+-- 1. t_<flux> : lignes du Bronze nettoyées, avec le motif de rejet (NULL si la ligne est valide), sa position d'origine et une empreinte
+-- 2. d_<flux> : lignes valides, avec rn (rang dans la clé) et la plus petite et la plus grande empreinte de la clé (emp_min, emp_max)
+--    emp_min = emp_max  -> doublons exacts, on garde rn = 1
+--    emp_min <> emp_max -> contenus différents, toute la clé part en rejet
+-- 3. INSERT OVERWRITE de la table Silver et de sa partition de rejets.
+-- Le DROP avant chaque table temporaire permet de relancer le script dans la même session.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -427,11 +350,7 @@ SELECT t.*,
 FROM t_localisation t
 WHERE t.motif IS NULL;
 
--- Départements du COG, complétés par les codes absents du COG mais
--- présents dans les autres sources (fiche 3.2) :
---   20         ancien code de la Corse, rattaché à la région 94
---   975 à 988  collectivités d'outre-mer, région COM
---   99         étranger
+-- Départements du COG, plus les codes présents dans les autres sources mais absents du COG : 20 (ancien code de la Corse), 975 à 988 (collectivités d'outre-mer) et 99 (étranger)
 INSERT OVERWRITE TABLE localisation
 SELECT u.code_departement, u.departement, u.code_region, u.region, u.origine, u.id_execution
 FROM (
@@ -506,9 +425,7 @@ FROM (
 
 -- ---------------------------------------------------------------------
 -- FLUX DIAGNOSTIC : référentiel CIM-10
--- Clé : code_diagnostic, normalisé en majuscules sans espace (fiche 3.5).
--- La catégorie (3 premiers caractères) est préparée ici, le chapitre
--- CIM-10 sera calculé dans le Gold à partir de cette catégorie.
+-- Clé : code_diagnostic, normalisé en majuscules sans espace
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_diagnostic;
 CREATE TEMPORARY TABLE t_diagnostic AS
@@ -550,8 +467,6 @@ FROM (
 -- ---------------------------------------------------------------------
 -- FLUX PROFESSIONNEL : professionnels de santé
 -- Clé : id_prof_pseudo
--- Le libellé de spécialité est repris de silver.specialite, construit
--- juste au-dessus. Un code absent du référentiel donne NULL (fiche 3.6).
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_professionnel;
 CREATE TEMPORARY TABLE t_professionnel AS
@@ -602,11 +517,10 @@ FROM (
 -- ---------------------------------------------------------------------
 -- FLUX PATIENT
 -- Clé : id_patient_pseudo
--- Sexe : female -> F, male -> M, toute autre valeur -> I (fiche 3.4).
--- Date de naissance : M/J/AAAA d'après le livrable. Le format AAAA-MM-JJ
--- est aussi accepté, au cas où PostgreSQL renvoie son format natif.
--- Une date illisible donne NULL sans rejeter le patient.
 -- ---------------------------------------------------------------------
+
+-- Sexe : female -> F, male -> M, autre -> I 
+-- Date de naissance M/J/AAAA, ou AAAA-MM-JJ si PostgreSQL renvoie son format natif. Une date illisible donne NULL sans rejeter le patient
 DROP TABLE IF EXISTS t_patient;
 CREATE TEMPORARY TABLE t_patient AS
 SELECT id_execution, fichier, pos_octet, contenu, id_patient_pseudo, sexe, date_naissance, motif,
@@ -652,10 +566,9 @@ FROM (
 -- ---------------------------------------------------------------------
 -- FLUX CONSULTATION
 -- Clé : num_consultation
--- Date au format AAAA-MM-JJ. Une date invalide donne id_temps = -1 et une
--- heure illisible donne NULL : la consultation est gardée dans les deux
--- cas, seule l'absence du numéro entraîne un rejet.
 -- ---------------------------------------------------------------------
+
+-- Date au format AAAA-MM-JJ. Une date invalide donne id_temps = -1 et une heure illisible donne NULL : la consultation est gardée dans les deux cas, seule l'absence du numéro entraîne un rejet.
 DROP TABLE IF EXISTS t_consultation;
 CREATE TEMPORARY TABLE t_consultation AS
 SELECT id_execution, fichier, pos_octet, contenu,
@@ -708,10 +621,9 @@ FROM (
 -- ---------------------------------------------------------------------
 -- FLUX HOSPITALISATION
 -- Clé : num_hospitalisation
--- Date d'entrée au format JJ/MM/AAAA. Durée du séjour obligatoire :
--- vide ou illisible -> rejet pour format invalide, hors 1 à 365 jours ->
--- rejet pour valeur hors domaine (fiche 4.2).
 -- ---------------------------------------------------------------------
+
+-- Date d'entrée au format JJ/MM/AAAA. Durée du séjour obligatoire : vide ou illisible -> rejet pour format invalide, hors 1 à 365 jours -> rejet pour valeur hors domaine
 DROP TABLE IF EXISTS t_hospitalisation;
 CREATE TEMPORARY TABLE t_hospitalisation AS
 SELECT id_execution, fichier, pos_octet, contenu,
@@ -764,16 +676,15 @@ FROM (
 ) r;
 
 -- ---------------------------------------------------------------------
--- FLUX SATISFACTION : résultats e-Satis 2017, 2019 et 2020
+-- FLUX SATISFACTION : e-Satis 2017, 2019 et 2020
 -- Clé : (finess_geo, annee)
--- Règles de la fiche 4.3 :
---   valeur vide (classes DI, NR, NV)   -> NULL, la ligne est gardée
---   texte présent mais non numérique   -> rejet pour format invalide
---   note ou taux hors 0 à 100          -> rejet pour valeur hors domaine
---   taux et nb_reco absents en 2017    -> NULL
--- La sous-requête convertit les valeurs, la requête principale en déduit
--- le motif de rejet.
 -- ---------------------------------------------------------------------
+
+-- Règles :
+--   valeur vide (classes DI, NR, NV) -> NULL, ligne gardée
+--   texte non numérique              -> rejet, format invalide
+--   note ou taux hors 0 à 100        -> rejet, valeur hors domaine
+--   taux et nb_reco absents en 2017  -> NULL
 DROP TABLE IF EXISTS t_satisfaction;
 CREATE TEMPORARY TABLE t_satisfaction AS
 SELECT id_execution, fichier, pos_octet, contenu,
@@ -839,8 +750,7 @@ SELECT t.*,
 FROM t_satisfaction t
 WHERE t.motif IS NULL;
 
--- L'identifiant d'organisation est reconstruit comme dans le référentiel
--- (F + FINESS géographique), et la date du recueil est fixée au 1er janvier.
+-- identifiant_organisation reconstruit comme dans le référentiel (F + FINESS géographique), date du recueil fixée au 1er janvier
 INSERT OVERWRITE TABLE satisfaction
 SELECT concat('F', finess_geo) AS identifiant_organisation,
        finess_geo, num_finess_juridique, raison_sociale, region,
@@ -864,9 +774,9 @@ FROM (
 -- ---------------------------------------------------------------------
 -- FLUX ETABLISSEMENT : référentiel des organisations
 -- Clé : identifiant_organisation, qui doit commencer par F, C ou R
--- (fiche 3.3). Le département vient du code commune, à défaut du code
--- postal, et n'est gardé que s'il existe dans silver.localisation.
 -- ---------------------------------------------------------------------
+
+-- Le département vient du code commune, à défaut du code postal, et n'est gardé que s'il existe dans silver.localisation.
 DROP TABLE IF EXISTS t_etablissement;
 CREATE TEMPORARY TABLE t_etablissement AS
 SELECT id_execution, fichier, pos_octet, contenu, identifiant_organisation,
@@ -874,8 +784,7 @@ SELECT id_execution, fichier, pos_octet, contenu, identifiant_organisation,
             WHEN 'F' THEN 'Établissement FINESS'
             WHEN 'C' THEN 'Cabinet SIRET'
             WHEN 'R' THEN 'Cabinet RPPS' END AS type_structure,
--- Numéro FINESS géographique : seulement pour F suivi de 9 caractères.
--- Les 21 332 identifiants F de 18 caractères ne sont pas un FINESS.
+-- FINESS géographique seulement pour F + 9 caractères : les 21 332 identifiants F de 18 caractères ne sont pas des FINESS.
        CASE WHEN identifiant_organisation LIKE 'F%' AND length(identifiant_organisation) = 10
             THEN substr(identifiant_organisation, 2) END AS num_finess_geo,
        CASE WHEN finess_juridique IS NOT NULL THEN lpad(finess_juridique, 9, '0') END AS num_finess_juridique,
@@ -911,8 +820,7 @@ SELECT t.*,
 FROM t_etablissement t
 WHERE t.motif IS NULL;
 
--- La jointure sur localisation laisse le département à NULL s'il n'existe
--- pas dans le COG. Le Gold le remplacera par le membre -1.
+-- Département absent du COG -> NULL (membre -1 dans le Gold)
 INSERT OVERWRITE TABLE etablissement
 SELECT d.identifiant_organisation, d.type_structure, d.num_finess_geo, d.num_finess_juridique,
        d.raison_sociale, d.code_commune, d.commune, d.code_postal,
@@ -932,15 +840,9 @@ FROM (
 ) r;
 
 -- ---------------------------------------------------------------------
--- Ajout des établissements notés par e-Satis mais absents du référentiel
--- (fiche 3.3), pour que chaque ligne de FAIT_SATISFACTION trouve son
--- établissement.
---   Nom et FINESS juridique : ceux de la dernière année de recueil.
---   Département : déduit du FINESS géographique, puis contrôlé avec la
---   région indiquée par e-Satis. En cas de désaccord, le département
---   reste à NULL (membre -1 dans le Gold) plutôt que d'être faux.
---   e-Satis écrit PACA pour Provence-Alpes-Côte d'Azur, et regroupe
---   La Réunion et Mayotte sous Océan Indien.
+-- Établissements notés par e-Satis mais absents du référentiel 
+-- Nom et FINESS juridique : ceux de la dernière année de recueil
+-- Département : déduit du FINESS géographique, gardé seulement s'il est dans la région indiquée par e-Satis, sinon NULL (membre -1 dans le Gold)
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_etab_esatis;
 CREATE TEMPORARY TABLE t_etab_esatis AS
@@ -971,10 +873,7 @@ SELECT * FROM t_etab_esatis;
 
 -- ---------------------------------------------------------------------
 -- FLUX ACTIVITE : rattachement professionnel -> organisation
--- Clé : le couple (id_prof_pseudo, identifiant_organisation). Le contenu
--- se résume à la clé, un doublon est donc forcément exact.
--- Une activité sans organisation (exercice libéral non rattaché) n'est
--- pas une erreur : elle est ignorée et comptée à part dans l'audit.
+-- Clé : (id_prof_pseudo, identifiant_organisation). Le contenu se résume à la clé, un doublon est donc forcément exact.
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_activite;
 CREATE TEMPORARY TABLE t_activite AS
@@ -1006,15 +905,14 @@ WHERE motif IS NOT NULL;
 
 -- ---------------------------------------------------------------------
 -- FLUX DECES : fichier INSEE, 25 millions de lignes
--- Clé : l'acte de décès = (commune du décès, date du décès, numéro
--- d'acte). Le numéro seul ne suffit pas : chaque mairie recommence à 1
--- chaque année. Aucune identité n'est extraite par Talend.
--- Règles de la fiche 4.4 :
+-- Clé : l'acte de décès = (commune du décès, date du décès, numéro d'acte). Le numéro seul ne suffit pas : chaque mairie recommence à 1 chaque année. Aucune identité n'est extraite par Talend
+-- ---------------------------------------------------------------------
+
+-- Règles :
 --   sexe 1 -> M, 2 -> F, autre -> I
 --   date incomplète (AAAA ou AAAA-MM) -> date NULL, mais l'année est
 --   gardée dans annee_naissance et annee_deces pour l'âge et la partition
 --   ligne sans ses 6 colonnes -> rejet, numéro d'acte vide -> rejet
--- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS t_deces;
 CREATE TEMPORARY TABLE t_deces AS
 SELECT id_execution,
@@ -1036,11 +934,7 @@ SELECT id_execution,
             WHEN txt(numero_acte_deces) IS NULL THEN 'cle absente' END AS motif
 FROM bronze.deces;
 
--- Dédoublonnage par GROUP BY au lieu des fonctions de fenêtre des autres
--- flux : sur 25 millions de lignes, les fenêtres dépassent la mémoire de
--- la VM. Le résultat est le même. Dans une clé sans conflit
--- (emp_min = emp_max), toutes les lignes sont identiques, et min() redonne
--- donc leurs valeurs.
+-- Dédoublonnage par GROUP BY : sur 25 millions de lignes, les fonctions de fenêtre dépassent la mémoire de la VM. Dans une clé sans conflit, toutes les lignes sont identiques, min() redonne donc leurs valeurs.
 DROP TABLE IF EXISTS d_deces;
 DROP TABLE IF EXISTS g_deces;
 CREATE TEMPORARY TABLE g_deces AS
@@ -1058,14 +952,8 @@ FROM t_deces
 WHERE motif IS NULL
 GROUP BY cle;
 
--- num_deces, attribué après dédoublonnage (fiche 4.4)
---   Valeur : AAAAMMJJ du décès x 100000 + rang du décès dans la journée,
---   ou 0 x 100000 + rang pour les dates incomplètes. Exemple : 42e décès
---   du 15/03/2019 -> 2019031500042.
---   Unique et calculé sans tri global des 25 millions de lignes, mais pas
---   stable : si un décès d'une journée apparaît ou disparaît au chargement
---   suivant, les rangs de cette journée changent. Type BIGINT, trop grand
---   pour un INT.
+-- num_deces : AAAAMMJJ x 100000 + rang dans la journée (0 pour une date incomplète). Ex. : 42e décès du 15/03/2019 -> 2019031500042.
+-- Unique sans tri global, mais pas stable : si un décès d'une journée apparaît ou disparaît, les rangs de cette journée changent.
 INSERT OVERWRITE TABLE deces
 SELECT CAST(CASE WHEN d.id_temps = -1 THEN 0 ELSE d.id_temps END AS BIGINT) * 100000
          + ROW_NUMBER() OVER (PARTITION BY d.id_temps ORDER BY d.cle) AS num_deces,
@@ -1079,7 +967,6 @@ FROM (
 LEFT JOIN localisation l ON l.code_departement = dep_commune(d.code_lieu_deces);
 
 -- Rejets : lignes invalides, et toutes les lignes des actes en conflit
--- (même acte avec un sexe ou une date de naissance différents)
 INSERT OVERWRITE TABLE rejets PARTITION (flux = 'deces')
 SELECT r.id_execution, '20261104_1', '02_silver', r.fichier, r.pos_octet, r.contenu, r.motif,
        from_unixtime(unix_timestamp())
@@ -1093,11 +980,8 @@ FROM (
 ) r;
 
 -- =====================================================================
--- CORRESPONDANCES PSEUDONYME -> CLÉ (règle 2.3, fiches 3.4 et 3.6)
--- Un pseudonyme déjà présent garde sa clé. Un nouveau pseudonyme reçoit
--- la plus grande clé existante + 1, dans l'ordre des pseudonymes (et non
--- des identifiants d'origine, pour ne rien révéler de ceux-ci).
--- Au premier chargement, la table est vide et la numérotation part de 1.
+-- CORRESPONDANCES PSEUDONYME -> CLÉ 
+-- Un pseudonyme connu garde sa clé, un nouveau reçoit la plus grande clé + 1, dans l'ordre des pseudonymes
 -- =====================================================================
 INSERT INTO TABLE cle_patient
 SELECT n.id_patient_pseudo,
@@ -1122,16 +1006,10 @@ FROM (
 CROSS JOIN (SELECT nvl(max(id_professionnel), 0) AS cle_max FROM cle_professionnel) m;
 
 -- =====================================================================
--- AUDIT (section 2.8)
--- Une ligne par flux pour cette exécution.
---   lues      : lignes du Bronze (tables t_<flux>)
---   écrites   : lignes de la table Silver. Pour la localisation et les
---               établissements, seules les lignes issues de la source
---               sont comptées, sans les ajouts (COM, e-Satis)
---   rejetées  : lignes de la partition de rejets du flux
---   ignorées  : activités sans organisation
---   doublons  : déduits, lues - écrites - rejetées - ignorées
--- Statut ECHEC_SEUIL si plus de 5 % des lignes lues sont rejetées.
+-- AUDIT : une ligne par flux
+--   doublons = lues - écrites - rejetées - ignorées
+--   localisation et établissements : écrites sans les ajouts (COM, e-Satis)
+--   ECHEC_SEUIL si plus de 5 % des lignes lues sont rejetées
 -- =====================================================================
 INSERT INTO TABLE audit
 SELECT '20261104_1', l.id_execution, '02_silver', l.flux, from_unixtime(unix_timestamp()),
@@ -1173,7 +1051,7 @@ LEFT JOIN (
 ) r ON r.flux = l.flux;
 
 -- =====================================================================
--- CONTRÔLES AFFICHÉS EN FIN D'EXÉCUTION
+-- CONTRÔLES
 -- =====================================================================
 
 -- Contrôle 1 : bilan de l'exécution, un flux par ligne
@@ -1196,9 +1074,7 @@ FROM etablissement
 GROUP BY origine;
 
 -- Contrôle 4 : seuil de 5 % de rejets
--- assert_true provoque une erreur, et donc un code retour non nul, si un
--- flux de cette exécution est en ECHEC_SEUIL. L'orchestration ne doit
--- alors pas lancer le Gold. Résultat NULL = tout est conforme.
+-- assert_true fait échouer le script si un flux est en ECHEC_SEUIL : le Gold ne doit alors pas être lancé. NULL = tout est conforme.
 SELECT assert_true(count(*) = 0) AS seuil_rejets_respecte
 FROM audit
 WHERE id_silver = '20261104_1' AND statut <> 'OK';
