@@ -1,28 +1,19 @@
 -- =====================================================================
--- Projet CHU - Étape 1 : bases Hive et tables externes sur le Bronze
--- Exécution : beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 01_bronze.hql
+-- Projet CHU - Étape 1 : tables externes Hive sur le Bronze
+-- Exécution : beeline -u jdbc:hive2://localhost:10000 -n cloudera -f bronze.hql
 --
--- Les tables pointent sur les fichiers déposés par les jobs Talend J10 à J15 :
--- point-virgule comme séparateur, sans en-tête, sans guillemets, UTF-8.
--- Le séparateur s'écrit '\073' (son code octal) : beeline peut couper une
--- requête sur un point-virgule écrit en clair.
--- Toutes les colonnes sont en STRING : le typage se fait au passage en Silver.
+-- Fichiers déposés par Talend (J10 à J15) : point-virgule, sans en-tête, UTF-8.
+-- Colonnes en STRING : le typage se fait en Silver.
 -- Tables EXTERNAL : un DROP TABLE ne supprime pas les fichiers de HDFS.
 -- =====================================================================
 
--- /silver et /gold doivent exister et appartenir à cloudera (comme /bronze) :
---   sudo -u hdfs hdfs dfs -mkdir -p /silver /gold
---   sudo -u hdfs hdfs dfs -chown cloudera:cloudera /silver /gold
--- La base bronze n'a pas d'emplacement propre : ses tables externes pointent sur /bronze.
 CREATE DATABASE IF NOT EXISTS bronze COMMENT 'Staging brut : copie des extractions Talend';
 CREATE DATABASE IF NOT EXISTS silver COMMENT 'Staging nettoyé : typé, dédoublonné, normalisé' LOCATION '/silver';
 CREATE DATABASE IF NOT EXISTS gold   COMMENT 'Entrepôt décisionnel : constellation, Parquet'  LOCATION '/gold';
 
 USE bronze;
 
--- ---------------------------------------------------------------------
--- Source 1 : PostgreSQL (job J10_ING_POSTGRES)
--- ---------------------------------------------------------------------
+-- Source 1 : PostgreSQL (J10)
 DROP TABLE IF EXISTS patient;
 CREATE EXTERNAL TABLE patient (
     id_patient_pseudo  STRING COMMENT 'HMAC-SHA256 de Id_patient',
@@ -80,9 +71,7 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/postgres/diagnostics';
 
--- ---------------------------------------------------------------------
--- Source 1b : Hospitalisations.csv (job J11_ING_HOSPITALISATIONS)
--- ---------------------------------------------------------------------
+-- Source 1b : Hospitalisations.csv (J11)
 DROP TABLE IF EXISTS hospitalisations;
 CREATE EXTERNAL TABLE hospitalisations (
     num_hospitalisation       STRING,
@@ -97,9 +86,7 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/hospitalisations';
 
--- ---------------------------------------------------------------------
--- Source 2 : référentiel FINESS (job J12_ING_REFERENTIEL)
--- ---------------------------------------------------------------------
+-- Source 2 : référentiel FINESS (J12)
 DROP TABLE IF EXISTS etablissement;
 CREATE EXTERNAL TABLE etablissement (
     identifiant_organisation        STRING,
@@ -124,11 +111,7 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/referentiel/activite';
 
--- ---------------------------------------------------------------------
--- Source 3 : e-Satis HAS (job J13_ING_ESATIS)
--- Une seule table sur le dossier : esatis_2017.csv, esatis_2019.csv et
--- esatis_2020.csv ont les mêmes colonnes, annee_recueil les distingue.
--- ---------------------------------------------------------------------
+-- Source 3 : e-Satis HAS (J13)
 DROP TABLE IF EXISTS esatis;
 CREATE EXTERNAL TABLE esatis (
     id_execution                STRING,
@@ -153,11 +136,7 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/esatis';
 
--- ---------------------------------------------------------------------
--- Source 4 : décès INSEE (job J14_ING_DECES)
--- Talend n'extrait aucune identité (ni nom, ni prénoms, ni lieu de naissance).
--- Ordre des colonnes = sortie de J14 : date_deces avant date_naissance.
--- ---------------------------------------------------------------------
+-- Source 4 : décès INSEE (J14)
 DROP TABLE IF EXISTS deces;
 CREATE EXTERNAL TABLE deces (
     id_execution         STRING,
@@ -171,9 +150,7 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/deces';
 
--- ---------------------------------------------------------------------
--- Source 5 : COG INSEE (job J15_ING_COG)
--- ---------------------------------------------------------------------
+-- Source 5 : COG INSEE (J15)
 DROP TABLE IF EXISTS cog_departement;
 CREATE EXTERNAL TABLE cog_departement (
     dep           STRING,
@@ -195,9 +172,11 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\073'
 STORED AS TEXTFILE
 LOCATION '/bronze/cog/region';
 
--- ---------------------------------------------------------------------
--- Contrôles : nombre de lignes par table (à comparer aux sources)
--- ---------------------------------------------------------------------
+-- =====================================================================
+-- Contrôles
+-- =====================================================================
+
+-- Nombre de lignes par table, à comparer aux sources
 SELECT 'patient'          AS table_bronze, COUNT(*) AS nb_lignes FROM patient
 UNION ALL SELECT 'consultation' AS table_bronze,     COUNT(*) AS nb_lignes FROM consultation
 UNION ALL SELECT 'professionnel' AS table_bronze,    COUNT(*) AS nb_lignes FROM professionnel
@@ -211,8 +190,7 @@ UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS nb_lignes FROM 
 UNION ALL SELECT 'cog_departement' AS table_bronze,  COUNT(*) AS nb_lignes FROM cog_departement
 UNION ALL SELECT 'cog_region' AS table_bronze,       COUNT(*) AS nb_lignes FROM cog_region;
 
--- Lignes mal découpées : un point-virgule dans un texte décale les colonnes.
--- La dernière colonne (id_execution ou code) doit toujours être remplie.
+-- Lignes mal découpées : un point-virgule dans un texte décale les colonnes
 SELECT 'etablissement' AS table_bronze, COUNT(*) AS lignes_suspectes FROM etablissement WHERE id_execution IS NULL OR id_execution = ''
 UNION ALL SELECT 'hospitalisations' AS table_bronze, COUNT(*) AS lignes_suspectes FROM hospitalisations WHERE id_execution IS NULL OR id_execution = ''
 UNION ALL SELECT 'deces' AS table_bronze,            COUNT(*) AS lignes_suspectes FROM deces WHERE numero_acte_deces IS NULL
