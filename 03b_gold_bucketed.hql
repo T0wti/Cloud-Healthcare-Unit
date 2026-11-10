@@ -17,8 +17,8 @@ SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- Projet CHU - Benchmark : scénario v2, PARTITIONNÉ + BUCKETÉ (gold_bucketed)
 -- Exécution : beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03b_gold_bucketed.hql
--- Prérequis : gold chargé et conforme (03_gold_partinioning.hql)
--- Repères : mêmes conventions que 03_gold_partinioning.hql (dont aucun
+-- Prérequis : gold chargé et conforme (03_gold_partitioning.hql)
+-- Repères : mêmes conventions que 03_gold_partitioning.hql (dont aucun
 -- commentaire juste avant un SET)
 --
 -- PLAN
@@ -51,7 +51,7 @@ SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- 0. [CONFIG] RÉGLAGES DE SESSION (SET en tête), [DDL] BASE gold_bucketed
 -- Partitions dynamiques, Parquet Snappy 32 Mo, Hive on Spark : mêmes réglages
--- que 03_gold_partinioning et 03a_gold_flat. enforce.bucketing donne un
+-- que 03_gold_partitioning et 03a_gold_flat. enforce.bucketing donne un
 -- réducteur par bucket : vérifié en 3c.
 -- =====================================================================
 CREATE DATABASE IF NOT EXISTS gold_bucketed
@@ -133,7 +133,7 @@ FROM gold.fait_consultation;
 SET mapreduce.job.reduces=30;
 
 -- [CONFIG] SET ci-dessus : 30 réducteurs pour fait_deces, remis à -1 ensuite
--- (même logique que 03_gold_partinioning.hql)
+-- (même logique que 03_gold_partitioning.hql)
 -- [DDL] fait_deces : partitionné par année, sans bucket (comme dans gold)
 DROP TABLE IF EXISTS fait_deces;
 CREATE TABLE fait_deces (

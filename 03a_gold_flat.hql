@@ -11,8 +11,8 @@ SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- Projet CHU - Benchmark : scénario v0, SANS OPTIMISATION (gold_flat)
 -- Exécution : beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03a_gold_flat.hql
--- Prérequis : gold chargé et conforme (03_gold_partinioning.hql)
--- Repères : mêmes conventions que 03_gold_partinioning.hql (dont aucun
+-- Prérequis : gold chargé et conforme (03_gold_partitioning.hql)
+-- Repères : mêmes conventions que 03_gold_partitioning.hql (dont aucun
 -- commentaire juste avant un SET)
 --
 -- PLAN
@@ -31,7 +31,7 @@ SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- 0. [CONFIG] RÉGLAGES DE SESSION (SET en tête), [DDL] BASE gold_flat
 -- Parquet Snappy 32 Mo, Hive on Spark : mêmes réglages que
--- 03_gold_partinioning et 03b_gold_bucketed
+-- 03_gold_partitioning et 03b_gold_bucketed
 -- =====================================================================
 CREATE DATABASE IF NOT EXISTS gold_flat
     COMMENT 'Benchmark : constellation Parquet sans partition ni bucket'

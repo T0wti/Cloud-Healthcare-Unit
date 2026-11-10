@@ -16,7 +16,7 @@ SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- Projet CHU - Étape 3 : du Silver au Gold (constellation Parquet)
 -- Benchmark : scénario v1, PARTITIONNÉ (v0 = 03a gold_flat, v2 = 03b gold_bucketed)
--- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03_gold_partinioning.hql > 03.log 2>&1 &
+-- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03_gold_partitioning.hql > 03.log 2>&1 &
 --
 -- Repères : [DDL] structures, [DML] chargement, [DDL+DML] CREATE TABLE AS SELECT,
 --           [CONTRÔLE] lecture seule, [CONFIG] SET, [STATS] ANALYZE TABLE
@@ -424,7 +424,7 @@ FROM silver.diagnostic;
 
 -- [DML] Rejets : catégorie hors de toute plage (chapitre NULL)
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_dim_diagnostic')
-SELECT id_execution, '20261105_1', '03_gold_partinioning', 'silver.diagnostic', CAST(NULL AS BIGINT),
+SELECT id_execution, '20261105_1', '03_gold_partitioning', 'silver.diagnostic', CAST(NULL AS BIGINT),
        concat_ws('\073', code_diagnostic, libelle_diagnostic),
        'valeur hors domaine', from_unixtime(unix_timestamp())
 FROM t_dim_diagnostic
@@ -535,7 +535,7 @@ FROM (
 -- ---------------------------------------------------------------------
 -- [DML] Rejets : numéro illisible ou heure de début absente
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_fait_consultation')
-SELECT id_execution, '20261105_1', '03_gold_partinioning', 'silver.consultation', CAST(NULL AS BIGINT),
+SELECT id_execution, '20261105_1', '03_gold_partitioning', 'silver.consultation', CAST(NULL AS BIGINT),
        concat_ws('\073', num_consultation, id_patient_pseudo, id_prof_pseudo, code_diagnostic,
                          date_consultation, heure_debut),
        CASE WHEN CAST(num_consultation AS INT) IS NULL THEN 'format invalide' ELSE 'heure absente' END,
@@ -578,7 +578,7 @@ DISTRIBUTE BY x.annee;
 -- ---------------------------------------------------------------------
 -- [DML] Rejets : numéro illisible (la durée a déjà été contrôlée en Silver)
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_fait_hospitalisation')
-SELECT id_execution, '20261105_1', '03_gold_partinioning', 'silver.hospitalisation', CAST(NULL AS BIGINT),
+SELECT id_execution, '20261105_1', '03_gold_partitioning', 'silver.hospitalisation', CAST(NULL AS BIGINT),
        concat_ws('\073', num_hospitalisation, id_patient_pseudo, identifiant_organisation,
                          code_diagnostic, date_entree),
        'format invalide', from_unixtime(unix_timestamp())
@@ -673,7 +673,7 @@ SET mapreduce.job.reduces=-1;
 --   dimensions : écart négatif possible (entités disparues conservées)
 --   plus de 5 % de rejets : ECHEC_SEUIL
 INSERT INTO TABLE silver.audit
-SELECT '20261105_1', l.id_execution, '03_gold_partinioning', l.flux, from_unixtime(unix_timestamp()),
+SELECT '20261105_1', l.id_execution, '03_gold_partitioning', l.flux, from_unixtime(unix_timestamp()),
        l.lues, e.ecrites, nvl(r.rejetees, 0),
        l.lues - e.ecrites - nvl(r.rejetees, 0),
        CAST(0 AS BIGINT),

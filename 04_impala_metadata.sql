@@ -3,7 +3,7 @@
 -- Exécution : impala-shell -i localhost:21000 -f 04_impala_metadata.sql
 --
 -- Ni DDL ni DML : seulement les métadonnées d'Impala. Les tables sont créées
--- par Hive (03_gold_partinioning.hql, 03a_gold_flat.hql, 03b_gold_bucketed.hql).
+-- par Hive (03_gold_partitioning.hql, 03a_gold_flat.hql, 03b_gold_bucketed.hql).
 -- Repères : [MÉTADONNÉES] INVALIDATE METADATA, [STATS] COMPUTE STATS,
 --           [CONTRÔLE] EXPLAIN (lecture seule)
 --
@@ -12,7 +12,7 @@
 --   périmée jusqu'à INVALIDATE METADATA.
 --   Sans COMPUTE STATS, Impala choisit mal l'ordre et le type des jointures.
 --
--- QUAND : après chaque exécution de 03_gold_partinioning.hql, 03a ou 03b.
+-- QUAND : après chaque exécution de 03_gold_partitioning.hql, 03a ou 03b.
 -- =====================================================================
 
 -- =====================================================================

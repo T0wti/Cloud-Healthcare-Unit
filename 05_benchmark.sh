@@ -7,11 +7,11 @@
 #                  table : il n'envoie à Hive que des lectures (SELECT,
 #                  EXPLAIN, SHOW TABLES).
 #                  Création des tables (DDL) et chargement des données (DML) :
-#                  03_gold_partinioning.hql, 03a_gold_flat.hql, 03b_gold_bucketed.hql.
+#                  03_gold_partitioning.hql, 03a_gold_flat.hql, 03b_gold_bucketed.hql.
 #
 # Exécution sur la VM : cd ~/chu_scripts && nohup bash 05_benchmark.sh > bench.out 2>&1 &
 # Suivi              : tail -f ~/chu_scripts/bench.out
-# Prérequis          : 03_gold_partinioning.hql, 03a_gold_flat.hql, 03b_gold_bucketed.hql
+# Prérequis          : 03_gold_partitioning.hql, 03a_gold_flat.hql, 03b_gold_bucketed.hql
 #                      exécutés (statistiques Hive comprises). 04_impala_metadata.sql
 #                      n'est pas nécessaire ici : tout passe par Hive.
 #
