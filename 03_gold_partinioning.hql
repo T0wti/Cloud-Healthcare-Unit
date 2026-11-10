@@ -6,11 +6,6 @@ SET hive.exec.max.dynamic.partitions=500;
 SET hive.exec.max.dynamic.partitions.pernode=500;
 SET parquet.compression=SNAPPY;
 SET parquet.block.size=33554432;
--- Moteur : Hive on Spark, le même pour les trois scripts du benchmark
--- (02_gold, 03a_gold_flat, 03b_gold_bucketed) : les temps de chargement
--- restent comparables d'un modèle physique à l'autre.
--- Mémoire : YARN dispose de 3 Go, soit un exécuteur (1,5 Go + 384 Mo) et le
--- driver (512 Mo + 384 Mo).
 SET hive.execution.engine=spark;
 SET spark.executor.instances=1;
 SET spark.executor.cores=2;
@@ -20,40 +15,57 @@ SET spark.driver.memory=512m;
 SET spark.yarn.driver.memoryOverhead=384;
 -- =====================================================================
 -- Projet CHU - Étape 3 : du Silver au Gold (constellation Parquet)
--- Benchmark : scénario v1, PARTITIONNÉ (gold_flat = v0, gold_bucketed = v2)
--- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 02_gold.hql > 03.log 2>&1 &
+-- Benchmark : scénario v1, PARTITIONNÉ (v0 = 03a gold_flat, v2 = 03b gold_bucketed)
+-- Exécution : nohup beeline -u jdbc:hive2://localhost:10000 -n cloudera -f 03_gold_partinioning.hql > 03.log 2>&1 &
 --
--- Identifiants écrits en dur, à remplacer partout avant une nouvelle exécution
+-- Repères : [DDL] structures, [DML] chargement, [DDL+DML] CREATE TABLE AS SELECT,
+--           [CONTRÔLE] lecture seule, [CONFIG] SET, [STATS] ANALYZE TABLE
+-- Aucun commentaire juste avant un SET : beeline (CDH) ne le reconnaîtrait
+-- plus comme SET. Les SET sont donc en tête, ou commentés après coup.
 --
--- Règles appliquées :
---   clés       : une clé attribuée ne change jamais, nouvelle entité = plus grande clé + 1
---   membres    : -1 Inconnu (toutes les dimensions), -2 Plusieurs (établissement, localisation)
---   faits      : clé étrangère jamais NULL, absente ou introuvable = -1
---   rejets     : silver.rejets, partitions gold_<table>
---   audit      : silver.audit et gold.controle_membres
+-- PLAN
+--   0. [CONFIG]   Réglages de session (en tête du fichier)
+--   1. [DDL]      Macros, base gold, puis [CONTRÔLE] du Silver
+--   2. [DDL]      Tables : 6 dimensions, 4 faits, 1 table de contrôle
+--   3. [DML]      Dimensions
+--   4. [DDL+DML]  Tables de travail des faits (temporaires)
+--   5. [DML]      Faits et rejets
+--   6. [DML]      Audit, puis [CONTRÔLE] vérifications
+--   7. [STATS]    Statistiques pour l'optimiseur
 --
--- Partitionnement : seulement là où une requête métier filtre sur l'année ET
--- où le volume le justifie.
---   fait_deces        (24,8 M lignes) : PARTITIONED BY (annee). « Décès 2019 »
---                       ne lit qu'une partition sur ~140.
---   fait_consultation (1 M lignes)    : PARTITIONED BY (annee). Tous les
---                       besoins « sur une période Y » filtrent l'année.
---   fait_hospitalisation (2 479) et fait_satisfaction (3 459) : PAS de
---                       partition. Quelques milliers de lignes : découper
---                       créerait des fichiers minuscules, plus lents à ouvrir
---                       qu'à lire. annee y reste une colonne ordinaire.
---   Dimensions : pas de partition (jointes, jamais filtrées par plage).
---   annee = id_temps DIV 10000, -1 quand id_temps vaut -1 ; pour les faits
---   partitionnés, seules les partitions reçues sont remplacées.
+-- IDENTIFIANTS D'EXÉCUTION en dur, à remplacer partout avant de relancer :
+--   '20261104_1' exécution Silver vérifiée en entrée, '20261105_1' cette exécution Gold
 --
--- Écarts assumés avec le dictionnaire :
---   num_deces est en BIGINT (AAAAMMJJ x 100000 + rang) et non en INT
---   les faits portent en plus la colonne annee
+-- RÈGLES
+--   clés    : une clé attribuée ne change jamais, nouvelle entité = plus grande clé + 1
+--   membres : -1 Inconnu (toutes les dimensions), -2 Plusieurs (établissement, localisation)
+--   faits   : clé étrangère jamais NULL, -1 si absente ou introuvable
+--   rejets dans silver.rejets (partitions gold_<table>), audit dans silver.audit
+--   et gold.controle_membres
+--
+-- PARTITIONNEMENT par annee (= id_temps DIV 10000, -1 si id_temps = -1), là
+-- seulement où les requêtes filtrent l'année et où le volume le justifie :
+--   oui : fait_deces (24,8 M lignes, ~140 années), fait_consultation (1 M)
+--   non : fait_hospitalisation (2 479) et fait_satisfaction (3 459), des
+--         partitions de quelques lignes coûtent plus à ouvrir qu'à lire,
+--         ni les dimensions (jointes, jamais filtrées par plage)
+--   INSERT OVERWRITE dynamique : seules les années reçues sont remplacées.
+--
+-- ÉCARTS AU DICTIONNAIRE : num_deces en BIGINT (AAAAMMJJ x 100000 + rang),
+-- colonne annee ajoutée aux faits.
 -- =====================================================================
 
--- ---------------------------------------------------------------------
--- Fonctions de calcul (valables pour la session)
--- ---------------------------------------------------------------------
+-- =====================================================================
+-- 0. [CONFIG] RÉGLAGES DE SESSION (SET en tête du fichier)
+--   partitions dynamiques (annee lue dans les données), Parquet Snappy 32 Mo
+--   Hive on Spark, mêmes réglages dans 03a et 03b : temps de chargement comparables
+--   YARN dispose de 3 Go : un exécuteur (1,5 Go + 384 Mo) et le driver (512 Mo + 384 Mo)
+-- =====================================================================
+
+-- =====================================================================
+-- 1. [DDL] MACROS DE CALCUL (temporaires, limitées à la session) ET BASE gold
+-- =====================================================================
+
 -- Âge en années révolues entre deux dates AAAA-MM-JJ, NULL si une date manque
 CREATE TEMPORARY MACRO age_revolu(naiss STRING, evt STRING)
     CAST(substr(evt, 1, 4) AS INT) - CAST(substr(naiss, 1, 4) AS INT)
@@ -71,17 +83,21 @@ CREATE DATABASE IF NOT EXISTS gold COMMENT 'Entrepôt décisionnel : constellati
 USE gold;
 
 -- ---------------------------------------------------------------------
--- Contrôle préalable : le Gold n'est pas écrit si l'exécution
--- Silver indiquée est absente ou si un de ses 11 flux dépasse le seuil
+-- [CONTRÔLE] Silver conforme avant toute écriture : assert_true arrête le
+-- script si l'exécution Silver est absente ou si l'un de ses 11 flux n'est
+-- pas OK.
 -- ---------------------------------------------------------------------
 SELECT assert_true(count(*) = 11 AND sum(CASE WHEN statut = 'OK' THEN 1 ELSE 0 END) = 11) AS silver_conforme
 FROM silver.audit
 WHERE id_silver = '20261104_1';
 
 -- =====================================================================
--- Tables Gold
--- Jamais supprimées : les dimensions portent les clés déjà attribuées.
+-- 2. [DDL] TABLES GOLD : 6 dimensions, 4 faits, 1 table de contrôle
+-- IF NOT EXISTS : les dimensions ne sont jamais supprimées, elles portent
+-- les clés déjà attribuées.
 -- =====================================================================
+
+-- Dimensions
 CREATE TABLE IF NOT EXISTS dim_temps (
     id_temps       INT,
     date_complete  TIMESTAMP,
@@ -137,6 +153,7 @@ CREATE TABLE IF NOT EXISTS dim_professionnel (
     categorie_professionnelle  STRING
 ) STORED AS PARQUET;
 
+-- Fait partitionné : annee est déclarée dans PARTITIONED BY, pas dans les colonnes
 CREATE TABLE IF NOT EXISTS fait_consultation (
     num_consultation  INT,
     id_patient        INT,
@@ -150,11 +167,10 @@ CREATE TABLE IF NOT EXISTS fait_consultation (
     creneau           STRING
 ) PARTITIONED BY (annee INT) STORED AS PARQUET;
 
--- fait_hospitalisation et fait_satisfaction ne sont plus partitionnées.
--- Elles sont supprimées puis recréées : sinon CREATE TABLE IF NOT EXISTS
--- garderait l'ancienne définition partitionnée et l'INSERT échouerait.
--- Sans risque : un fait est entièrement recalculé à chaque exécution, il ne
--- porte aucune clé à préserver (contrairement aux dimensions).
+-- Faits non partitionnés : annee est une colonne ordinaire.
+-- DROP puis CREATE : IF NOT EXISTS garderait une ancienne version
+-- partitionnée et l'INSERT échouerait. Sans risque : un fait est recalculé
+-- en entier et ne porte aucune clé à préserver.
 DROP TABLE IF EXISTS fait_hospitalisation;
 CREATE TABLE fait_hospitalisation (
     num_hospitalisation  INT,
@@ -188,6 +204,7 @@ CREATE TABLE fait_satisfaction (
     annee                INT
 ) STORED AS PARQUET;
 
+-- Fait partitionné
 CREATE TABLE IF NOT EXISTS fait_deces (
     num_deces        BIGINT,
     id_temps         INT,
@@ -197,7 +214,7 @@ CREATE TABLE IF NOT EXISTS fait_deces (
     nb_deces         INT
 ) PARTITIONED BY (annee INT) STORED AS PARQUET;
 
--- Part des membres -1 et -2 dans chaque fait, d'un chargement à l'autre 
+-- Contrôle : membres -1 / -2 par fait, une ligne par fait et par exécution
 CREATE TABLE IF NOT EXISTS controle_membres (
     id_gold             STRING,
     date_execution      STRING,
@@ -215,16 +232,21 @@ CREATE TABLE IF NOT EXISTS controle_membres (
 ) STORED AS PARQUET;
 
 -- =====================================================================
--- DIMENSIONS
--- Chaque dimension à clé stockée suit le même schéma, en 4 parties :
---   membres spéciaux
---   entités déjà connues : clé conservée, attributs mis à jour
+-- 3. [DML] CHARGEMENT DES DIMENSIONS
+-- INSERT OVERWRITE remplace la dimension, mais les clés déjà attribuées sont
+-- relues et conservées. Localisation, établissement et diagnostic sont
+-- l'union de 4 parties :
+--   membres spéciaux (-1, -2)
+--   entités connues   : clé conservée, attributs mis à jour
 --   nouvelles entités : plus grande clé + 1, dans l'ordre de la clé naturelle
 --   entités disparues de la source : ligne gardée, la clé reste valable
+-- « FROM (SELECT max(1) ...) o » sert seulement à produire une ligne unique.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- DIM_TEMPS : du 01/01/1880 au 31/12/2030, soit 55 152 jours
+-- [DML] DIM_TEMPS : calendrier généré, sans table source
+-- Du 01/01/1880 au 31/12/2030, soit 55 152 jours, plus le membre -1.
+-- id_temps = AAAAMMJJ. jour_semaine : 1 = lundi ... 7 = dimanche.
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_temps
 SELECT u.id_temps, u.date_complete, u.jour, u.jour_semaine, u.libelle_jour, u.semaine,
@@ -262,7 +284,8 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_LOCALISATION
+-- [DML] DIM_LOCALISATION : un département par ligne
+-- Clé naturelle : code_departement. Source : silver.localisation.
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_localisation
 SELECT u.id_localisation, u.code_departement, u.departement, u.code_region, u.region
@@ -299,7 +322,8 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_ETABLISSEMENT 
+-- [DML] DIM_ETABLISSEMENT
+-- Clé naturelle : identifiant_organisation. Source : silver.etablissement.
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_etablissement
 SELECT u.id_etablissement, u.identifiant_organisation, u.num_finess_geo, u.num_finess_juridique,
@@ -348,8 +372,9 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_PATIENT
--- Les clés sont dans silver.cle_patient. Chaque clé garde sa ligne, même si le patient a disparu de la source : un fait ne pointe jamais dans le vide.
+-- [DML] DIM_PATIENT
+-- Clés reprises de silver.cle_patient. Chaque clé garde sa ligne, même si le
+-- patient a disparu de la source : un fait ne pointe jamais dans le vide.
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_patient
 SELECT u.id_patient, u.sexe, u.annee_naissance
@@ -363,9 +388,11 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_DIAGNOSTIC
--- Une catégorie hors de toute plage part en rejet
+-- DIM_DIAGNOSTIC : chapitre CIM-10 déduit de la plage du code de catégorie.
+-- Catégorie hors de toute plage : rejetée, absente de la dimension.
 -- ---------------------------------------------------------------------
+
+-- [DDL+DML] Table temporaire t_dim_diagnostic
 DROP TABLE IF EXISTS t_dim_diagnostic;
 CREATE TEMPORARY TABLE t_dim_diagnostic AS
 SELECT code_diagnostic, libelle_diagnostic, code_categorie, id_execution,
@@ -395,13 +422,15 @@ SELECT code_diagnostic, libelle_diagnostic, code_categorie, id_execution,
        END AS chapitre_cim10
 FROM silver.diagnostic;
 
+-- [DML] Rejets : catégorie hors de toute plage (chapitre NULL)
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_dim_diagnostic')
-SELECT id_execution, '20261105_1', '03_gold', 'silver.diagnostic', CAST(NULL AS BIGINT),
+SELECT id_execution, '20261105_1', '03_gold_partinioning', 'silver.diagnostic', CAST(NULL AS BIGINT),
        concat_ws('\073', code_diagnostic, libelle_diagnostic),
        'valeur hors domaine', from_unixtime(unix_timestamp())
 FROM t_dim_diagnostic
 WHERE chapitre_cim10 IS NULL;
 
+-- [DML] Chargement de dim_diagnostic. Clé naturelle : code_diagnostic.
 INSERT OVERWRITE TABLE dim_diagnostic
 SELECT u.id_diagnostic, u.code_diagnostic, u.libelle_diagnostic, u.code_categorie, u.chapitre_cim10
 FROM (
@@ -436,8 +465,8 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- DIM_PROFESSIONNEL 
--- Les clés sont dans silver.cle_professionnel, même logique que DIM_PATIENT
+-- [DML] DIM_PROFESSIONNEL
+-- Clés reprises de silver.cle_professionnel, même logique que DIM_PATIENT.
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE dim_professionnel
 SELECT u.id_professionnel, u.profession, u.code_specialite, u.specialite, u.categorie_professionnelle
@@ -454,10 +483,12 @@ FROM (
 ) u;
 
 -- =====================================================================
--- TABLES DE TRAVAIL DES FAITS
+-- 4. [DDL+DML] TABLES DE TRAVAIL DES FAITS (temporaires)
+-- Elles donnent aux faits leurs clés d'établissement et de localisation.
 -- =====================================================================
 
--- Pour chaque organisation : sa clé et la clé de son département
+-- r_etablissement : pour chaque organisation, sa clé et la clé de son
+-- département (-1 si le département est introuvable)
 DROP TABLE IF EXISTS r_etablissement;
 CREATE TEMPORARY TABLE r_etablissement AS
 SELECT d.identifiant_organisation, d.id_etablissement, nvl(l.id_localisation, -1) AS id_localisation
@@ -466,14 +497,12 @@ LEFT JOIN silver.etablissement e ON e.identifiant_organisation = d.identifiant_o
 LEFT JOIN dim_localisation l ON l.code_departement = e.code_departement
 WHERE d.id_etablissement > 0;
 
--- Pour chaque médecin : son établissement et son département (fiche 4.1)
+-- r_medecin : établissement et département de chaque médecin (fiche 4.1)
 --   établissement : une organisation -> elle, plusieurs -> -2
---   département   : un seul parmi ses organisations -> lui, différents -> -2
---   un médecin sans organisation n'a pas de ligne ici : -1 dans le fait
--- CORRECTION : nb_org compte les établissements DISTINCTS retrouvés dans la
--- dimension, et non les lignes d'activité. Avec count(*), une activité en
--- double, ou une ligne sans organisation (exercice libéral) à côté d'un vrai
--- établissement, classait le médecin en -2 « Plusieurs » à tort.
+--   département   : un seul -> lui, plusieurs différents -> -2
+--   médecin sans organisation : pas de ligne ici, donc -1 dans le fait
+-- count(DISTINCT) et non count(*) : une activité en double ou une ligne sans
+-- organisation (exercice libéral) ne doit pas donner -2 à tort.
 DROP TABLE IF EXISTS r_medecin;
 CREATE TEMPORARY TABLE r_medecin AS
 SELECT g.id_prof_pseudo,
@@ -493,17 +522,20 @@ FROM (
 ) g;
 
 -- =====================================================================
--- FAITS
--- Faits partitionnés : DISTRIBUTE BY annee regroupe chaque année dans une seule tâche : peu de fichiers Parquet ouverts à la fois, donc moins de mémoire utilisée
--- Faits non partitionnés : un seul fichier par tâche, pas besoin de DISTRIBUTE BY
+-- 5. [DML] CHARGEMENT DES FAITS ET DE LEURS REJETS
+-- Lignes inexploitables -> silver.rejets (partition gold_<fait>).
+-- Clé étrangère : nvl(..., -1) quand la jointure ne trouve rien.
+-- Faits partitionnés : PARTITION (annee) prend l'année dans la dernière
+-- colonne du SELECT, DISTRIBUTE BY annee confie chaque année à une seule
+-- tâche, donc peu de fichiers Parquet ouverts et moins de mémoire.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- FAIT_CONSULTATION
--- Numéro illisible ou heure vide -> rejet
+-- FAIT_CONSULTATION (partitionné par année)
 -- ---------------------------------------------------------------------
+-- [DML] Rejets : numéro illisible ou heure de début absente
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_fait_consultation')
-SELECT id_execution, '20261105_1', '03_gold', 'silver.consultation', CAST(NULL AS BIGINT),
+SELECT id_execution, '20261105_1', '03_gold_partinioning', 'silver.consultation', CAST(NULL AS BIGINT),
        concat_ws('\073', num_consultation, id_patient_pseudo, id_prof_pseudo, code_diagnostic,
                          date_consultation, heure_debut),
        CASE WHEN CAST(num_consultation AS INT) IS NULL THEN 'format invalide' ELSE 'heure absente' END,
@@ -511,6 +543,9 @@ SELECT id_execution, '20261105_1', '03_gold', 'silver.consultation', CAST(NULL A
 FROM silver.consultation
 WHERE CAST(num_consultation AS INT) IS NULL OR heure_debut IS NULL;
 
+-- [DML] Chargement du fait.
+-- Établissement et localisation viennent du médecin (r_medecin).
+-- Créneau : Matin avant 13 h, Après-midi avant 20 h, Soir ensuite.
 INSERT OVERWRITE TABLE fait_consultation PARTITION (annee)
 SELECT x.num_consultation, x.id_patient, x.id_diagnostic, x.id_etablissement, x.id_temps,
        x.id_localisation, x.id_professionnel, x.age, x.nb_consultation, x.creneau, x.annee
@@ -539,17 +574,19 @@ FROM (
 DISTRIBUTE BY x.annee;
 
 -- ---------------------------------------------------------------------
--- FAIT_HOSPITALISATION
--- La durée a déjà été contrôlée en Silver
+-- FAIT_HOSPITALISATION (non partitionné)
 -- ---------------------------------------------------------------------
+-- [DML] Rejets : numéro illisible (la durée a déjà été contrôlée en Silver)
 INSERT OVERWRITE TABLE silver.rejets PARTITION (flux = 'gold_fait_hospitalisation')
-SELECT id_execution, '20261105_1', '03_gold', 'silver.hospitalisation', CAST(NULL AS BIGINT),
+SELECT id_execution, '20261105_1', '03_gold_partinioning', 'silver.hospitalisation', CAST(NULL AS BIGINT),
        concat_ws('\073', num_hospitalisation, id_patient_pseudo, identifiant_organisation,
                          code_diagnostic, date_entree),
        'format invalide', from_unixtime(unix_timestamp())
 FROM silver.hospitalisation
 WHERE CAST(num_hospitalisation AS INT) IS NULL;
 
+-- [DML] Chargement du fait.
+-- Établissement et localisation viennent de l'organisation (r_etablissement).
 INSERT OVERWRITE TABLE fait_hospitalisation
 SELECT x.num_hospitalisation, x.id_patient, x.id_diagnostic, x.id_etablissement, x.id_temps,
        x.id_localisation, x.age, x.nb_hospitalisation, x.duree_sejour_jours, x.annee
@@ -573,8 +610,8 @@ FROM (
 ) x;
 
 -- ---------------------------------------------------------------------
--- FAIT_SATISFACTION
--- Les notes passent de DOUBLE à DECIMAL(5,2)
+-- [DML] FAIT_SATISFACTION (non partitionné, aucun rejet)
+-- Les notes passent de DOUBLE à DECIMAL(5,2).
 -- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE fait_satisfaction
 SELECT x.id_etablissement, x.id_temps, x.id_localisation, x.classement, x.note_satisfaction, x.nb_avis,
@@ -600,14 +637,15 @@ FROM (
     LEFT JOIN r_etablissement re ON re.identifiant_organisation = s.identifiant_organisation
 ) x;
 
--- ---------------------------------------------------------------------
--- FAIT_DECES
--- Le code du département est déjà contrôlé en Silver
--- Âge : années révolues, à défaut année du décès, année de naissance
--- 30 tâches de réduction : les dizaines d'années de décès se répartissent entre elles, et chaque tâche garde peu de fichiers Parquet ouverts
--- ---------------------------------------------------------------------
 SET mapreduce.job.reduces=30;
 
+-- ---------------------------------------------------------------------
+-- [DML] FAIT_DECES (partitionné par année, aucun rejet : département déjà
+-- contrôlé en Silver)
+-- Âge : années révolues, à défaut année du décès - année de naissance.
+-- [CONFIG] SET ci-dessus : 30 réducteurs se partagent les ~140 années, chacun
+-- garde peu de fichiers Parquet ouverts. Remis à -1 (choix de Hive) ensuite.
+-- ---------------------------------------------------------------------
 INSERT OVERWRITE TABLE fait_deces PARTITION (annee)
 SELECT x.num_deces, x.id_temps, x.id_localisation, x.sexe, x.age, x.nb_deces, x.annee
 FROM (
@@ -627,11 +665,15 @@ DISTRIBUTE BY x.annee;
 SET mapreduce.job.reduces=-1;
 
 -- =====================================================================
--- AUDIT ET CONTRÔLES 
--- Faits : lues = écrites + rejetées. Dimensions : l'écart peut être négatif si des entités disparues de la source sont conservées
+-- 6. [DML] AUDIT, puis [CONTRÔLE] VÉRIFICATIONS AFFICHÉES
 -- =====================================================================
+
+-- [DML] silver.audit : une ligne par flux (INSERT INTO garde l'historique).
+--   faits : lues = écrites + rejetées, sinon ECHEC_CONTROLE
+--   dimensions : écart négatif possible (entités disparues conservées)
+--   plus de 5 % de rejets : ECHEC_SEUIL
 INSERT INTO TABLE silver.audit
-SELECT '20261105_1', l.id_execution, '03_gold', l.flux, from_unixtime(unix_timestamp()),
+SELECT '20261105_1', l.id_execution, '03_gold_partinioning', l.flux, from_unixtime(unix_timestamp()),
        l.lues, e.ecrites, nvl(r.rejetees, 0),
        l.lues - e.ecrites - nvl(r.rejetees, 0),
        CAST(0 AS BIGINT),
@@ -665,6 +707,7 @@ LEFT JOIN (
     SELECT flux, count(*) AS rejetees FROM silver.rejets WHERE flux LIKE 'gold_%' GROUP BY flux
 ) r ON r.flux = concat('gold_', l.flux);
 
+-- [DML] gold.controle_membres : lignes à -1 / -2 et âges NULL par fait
 INSERT INTO TABLE controle_membres
 SELECT '20261105_1', from_unixtime(unix_timestamp()), u.fait, u.nb_lignes, u.patient_m1, u.diagnostic_m1,
        u.etablissement_m1, u.etablissement_m2, u.temps_m1, u.localisation_m1, u.localisation_m2,
@@ -720,9 +763,9 @@ FROM (
 ) u;
 
 -- ---------------------------------------------------------------------
--- Contrôles affichés
+-- [CONTRÔLE] Vérifications affichées (lecture seule)
 -- ---------------------------------------------------------------------
--- Bilan par table
+-- Bilan de l'audit par table
 SELECT flux, lignes_lues, lignes_ecrites, lignes_rejetees, lignes_doublon, taux_rejet, statut
 FROM silver.audit
 WHERE id_silver = '20261105_1'
@@ -762,16 +805,16 @@ FROM (
     FROM fait_deces f LEFT JOIN dim_temps t ON t.id_temps = f.id_temps WHERE t.id_temps IS NULL
 ) c;
 
--- Le seuil et l'équilibre des faits : fait échouer beeline en cas de problème
+-- Verdict : assert_true fait échouer beeline si un flux n'est pas OK
 SELECT assert_true(count(*) = 0) AS gold_conforme
 FROM silver.audit
 WHERE id_silver = '20261105_1' AND statut <> 'OK';
 
 -- =====================================================================
--- STATISTIQUES (ajout pour le benchmark)
--- Les trois bases (gold_flat, gold, gold_bucketed) reçoivent exactement les
--- mêmes statistiques : sinon l'optimiseur ne fait pas les mêmes choix de
--- jointure et la comparaison mesure les statistiques, pas le modèle physique.
+-- 7. [STATS] STATISTIQUES
+-- Les mêmes dans gold, gold_flat et gold_bucketed : le benchmark compare
+-- alors le modèle physique, pas les statistiques.
+-- Tables partitionnées : statistiques de base, puis de colonnes.
 -- =====================================================================
 ANALYZE TABLE dim_temps         COMPUTE STATISTICS FOR COLUMNS;
 ANALYZE TABLE dim_localisation  COMPUTE STATISTICS FOR COLUMNS;
